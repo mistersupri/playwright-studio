@@ -1,5 +1,5 @@
 {
-  "name": "Remix: Remix: Remix: Remix: Remix: Playwright Studio",
+  "name": "Playwright Studio",
   "description": "A browser-based playground to write, run, and preview Playwright scripts with screenshots, logs, and a live preview.",
   "requestFramePermissions": [],
   "majorCapabilities": [

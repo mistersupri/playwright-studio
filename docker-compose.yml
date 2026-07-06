@@ -20,6 +20,8 @@ services:
       # Automatically injected by active host environment
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - APP_URL=${APP_URL:-http://localhost:3000}
+      - CLIENT_ID=${CLIENT_ID}
+      - CLIENT_SECRET=${CLIENT_SECRET}
     volumes:
       - studio-data:/app/server-data
       - studio-screenshots:/app/screenshots

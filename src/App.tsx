@@ -6206,11 +6206,11 @@ export default function App() {
                 return (
                   <div className="flex items-center gap-1.5 px-4 py-2 bg-[#161b22] border-b border-[#30363d] overflow-x-auto shrink-0 select-none">
                     <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider font-mono mr-2">Snapshot Files:</span>
-                    {snapshotFiles.map((file) => {
+                    {snapshotFiles.map((file, idx) => {
                       const isActive = file.name === diffActiveFileName;
                       return (
                         <button
-                          key={`diff-file-tab-${file.name}`}
+                          key={`diff-file-tab-${file.name}-${idx}`}
                           onClick={() => setDiffActiveFileName(file.name)}
                           className={`px-2.5 py-1 text-xs font-medium rounded transition-all cursor-pointer ${
                             isActive 
