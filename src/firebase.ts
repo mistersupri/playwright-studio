@@ -117,10 +117,6 @@ export async function signInWithPopup(authInstance?: any, providerInstance?: any
     // Set up message event listener
     const handleMessage = (event: MessageEvent) => {
       const origin = event.origin;
-      // Accept local development or live deployment origins
-      if (!origin.endsWith(".run.app") && !origin.includes("localhost") && !origin.includes("127.0.0.1")) {
-        return;
-      }
 
       const data = event.data;
       if (data && data.type === "OAUTH_AUTH_SUCCESS") {
