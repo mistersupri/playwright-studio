@@ -666,6 +666,36 @@ export default function App() {
     return () => window.removeEventListener("click", handleOutsideClick);
   }, []);
 
+  // Helper to ensure we always have a fresh idToken
+  const getFreshToken = async (): Promise<string | null> => {
+    if (!user) return null;
+    try {
+      const token = await user.getIdToken();
+      setIdToken(token);
+      return token;
+    } catch (e) {
+      console.error("Error refreshing Firebase token:", e);
+      return idToken;
+    }
+  };
+
+  // Keep references to the latest values to avoid stale closures in WebSocket event listeners without reconnecting
+  const workspaceFilesRef = useRef(workspaceFiles);
+  const activeFileNameRef = useRef(activeFileName);
+  const currentCodeRef = useRef(currentCode);
+
+  useEffect(() => {
+    workspaceFilesRef.current = workspaceFiles;
+  }, [workspaceFiles]);
+
+  useEffect(() => {
+    activeFileNameRef.current = activeFileName;
+  }, [activeFileName]);
+
+  useEffect(() => {
+    currentCodeRef.current = currentCode;
+  }, [currentCode]);
+
   // WebSockets collaboration system
   useEffect(() => {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -693,9 +723,38 @@ export default function App() {
         const data = JSON.parse(event.data);
         if (data.type === "welcome") {
           myClientIdRef.current = data.clientId;
-        } else if (data.type === "code:update") {
+        } else if (data.type === "workspace:request") {
+          // Send current workspace files back so the new user gets synced
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+              type: "workspace:update",
+              files: workspaceFilesRef.current,
+              activeFileName: activeFileNameRef.current,
+              currentCode: currentCodeRef.current
+            }));
+          }
+        } else if (data.type === "workspace:update") {
           ignoreNextChangeRef.current = true;
-          setCurrentCode(data.code);
+          setWorkspaceFiles(data.files || []);
+          if (data.activeFileName) {
+            setActiveFileName(data.activeFileName);
+          }
+          if (data.currentCode !== undefined) {
+            setCurrentCode(data.currentCode);
+          }
+        } else if (data.type === "code:update") {
+          const updatedFileName = data.fileName || "main.js";
+          ignoreNextChangeRef.current = true;
+          
+          // Always update the specific file's code in workspaceFiles
+          setWorkspaceFiles(prev =>
+            prev.map(f => f.name === updatedFileName ? { ...f, code: data.code } : f)
+          );
+          
+          // Only update editor if it is currently active
+          if (updatedFileName === activeFileNameRef.current) {
+            setCurrentCode(data.code);
+          }
         } else if (data.type === "presence:update") {
           // Filter out self so we only list others as collaborators
           const otherCollaborators = (data.presences || []).filter((p: any) => p.id !== myClientIdRef.current);
@@ -730,7 +789,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Listen to Google Auth Status Shifts
+  // Listen to Google Auth Status Shifts and Token Changes
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       setUser(currentUser);
@@ -1836,11 +1895,12 @@ export default function App() {
       return;
     }
 
+    const activeToken = await getFreshToken();
     setSavingScript(true);
     try {
       const headers: any = { "Content-Type": "application/json" };
-      if (idToken) {
-        headers["Authorization"] = `Bearer ${idToken}`;
+      if (activeToken) {
+        headers["Authorization"] = `Bearer ${activeToken}`;
       }
       const entryCode = workspaceFiles.find(f => f.name === "main.js")?.code || currentCode;
       const res = await fetch("/api/scripts", {
@@ -1864,7 +1924,7 @@ export default function App() {
         setVersions(saved.versions || []); // Populate versions list immediately
         setOriginalCode(currentCode);
         setOriginalName(nameToSave);
-        loadSavedScripts();
+        loadSavedScripts(activeToken || undefined);
       } else {
         const err = await res.json();
         alert(`Error: ${err.error || "Could not save project"}`);
@@ -1881,11 +1941,12 @@ export default function App() {
       alert("Please sign in with Google to copy this script to your workspace.");
       return;
     }
+    const activeToken = await getFreshToken();
     try {
       const copyName = `Copy of ${script.name}`;
       const headers: any = { "Content-Type": "application/json" };
-      if (idToken) {
-        headers["Authorization"] = `Bearer ${idToken}`;
+      if (activeToken) {
+        headers["Authorization"] = `Bearer ${activeToken}`;
       }
       const res = await fetch("/api/scripts", {
         method: "POST",
@@ -1902,7 +1963,7 @@ export default function App() {
         const saved = await res.json();
         addTerminalLine(`Copied "${script.name}" as "${copyName}" into your workspace`, "success");
         handleLoadScript(saved);
-        loadSavedScripts();
+        loadSavedScripts(activeToken || undefined);
       } else {
         const err = await res.json();
         alert(`Error making a copy: ${err.error || "failed"}`);
@@ -1922,10 +1983,11 @@ export default function App() {
   };
 
   const executeDeleteScript = async (script: SavedScript) => {
+    const activeToken = await getFreshToken();
     try {
       const headers: any = {};
-      if (idToken) {
-        headers["Authorization"] = `Bearer ${idToken}`;
+      if (activeToken) {
+        headers["Authorization"] = `Bearer ${activeToken}`;
       }
       const res = await fetch(`/api/scripts/${encodeURIComponent(script.id!)}`, {
         method: "DELETE",
@@ -1939,7 +2001,7 @@ export default function App() {
           setOriginalName("");
           setActiveScriptId(null);
         }
-        loadSavedScripts();
+        loadSavedScripts(activeToken || undefined);
       } else {
         const err = await res.json().catch(() => ({}));
         addTerminalLine(`Error deleting script: ${err.error || "Forbidden"}`, "error");
@@ -2024,11 +2086,22 @@ export default function App() {
     return issues;
   };
 
-  const handleRunScript = async (bypassValidation = false) => {
+  const handleRunScript = async (
+    bypassValidation = false,
+    overrideCode?: string,
+    overrideFiles?: { name: string; code: string }[],
+    overrideScriptId?: string | null,
+    overrideScriptName?: string
+  ) => {
     if (status === "running" || status === "connecting") return;
 
+    const codeToRun = overrideCode !== undefined ? overrideCode : currentCode;
+    const filesToRun = overrideFiles !== undefined ? overrideFiles : workspaceFiles;
+    const scriptIdToRun = overrideScriptId !== undefined ? overrideScriptId : activeScriptId;
+    const scriptNameToRun = overrideScriptName !== undefined ? overrideScriptName : scriptName;
+
     if (!bypassValidation) {
-      const issues = performPreRunValidation(currentCode, envVars);
+      const issues = performPreRunValidation(codeToRun, envVars);
       if (issues.length > 0) {
         setValidationIssues(issues);
         setShowValidationModal(true);
@@ -2048,10 +2121,11 @@ export default function App() {
     setStatus("connecting");
     addTerminalLine("Engine: Queueing run request in Playwright backend...", "info");
 
+    const activeToken = await getFreshToken();
     try {
       const headers: any = { "Content-Type": "application/json" };
-      if (idToken) {
-        headers["Authorization"] = `Bearer ${idToken}`;
+      if (activeToken) {
+        headers["Authorization"] = `Bearer ${activeToken}`;
       }
       // Build a clean dictionary/key-value record of env variables
       const envDict = envVars.reduce((acc, curr) => {
@@ -2066,10 +2140,10 @@ export default function App() {
         method: "POST",
         headers,
         body: JSON.stringify({
-          code: currentCode,
-          files: workspaceFiles,
-          scriptId: activeScriptId || "playground",
-          scriptName: scriptName || "Playground Run",
+          code: codeToRun,
+          files: filesToRun,
+          scriptId: scriptIdToRun || "playground",
+          scriptName: scriptNameToRun || "Playground Run",
           env: envDict,
           activeWorkspaceId: activeWorkspaceId,
           timeout: scriptTimeout,
@@ -2370,6 +2444,31 @@ export default function App() {
   runScriptRef.current = handleRunScript;
   saveScriptRef.current = handleSaveScript;
 
+  const handleRunSpecificScript = async (script: SavedScript) => {
+    // 1. Load the script in the editor first
+    handleLoadScript(script);
+
+    // 2. Extract code and files to run immediately
+    const files = script.files && script.files.length > 0
+      ? script.files
+      : [{ name: "main.js", code: script.code }];
+    const mainFile = files.find(f => f.name === "main.js") || files[0];
+
+    // 3. Trigger the run immediately with parameter overrides
+    await handleRunScript(true, mainFile.code, files, script.id || null, script.name);
+  };
+
+  const handleRunSpecificTemplate = async (tpl: ScriptTemplate) => {
+    // 1. Load/select the template
+    handleSelectTemplate(tpl);
+
+    // 2. Templates only contain a single main.js file
+    const files = [{ name: "main.js", code: tpl.code }];
+
+    // 3. Trigger the run immediately with parameter overrides
+    await handleRunScript(true, tpl.code, files, tpl.id || null, tpl.name);
+  };
+
   const handleClearArtifacts = async (type: string = "all") => {
     setClearType(type);
     setShowClearConfirm(true);
@@ -2614,16 +2713,29 @@ export default function App() {
                                             }`}
                                           >
                                             <span className="truncate pr-2 flex-grow">{s.name}</span>
-                                            <button
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleDeleteScript(s, e);
-                                              }}
-                                              title="Delete project"
-                                              className="text-zinc-500 hover:text-rose-400 p-0.5 opacity-0 group-hover:opacity-100 transition"
-                                            >
-                                              <Trash2 className="h-3 w-3" />
-                                            </button>
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleRunSpecificScript(s);
+                                                  setShowProjectDropdown(false);
+                                                }}
+                                                title="Run project script immediately"
+                                                className="text-zinc-500 hover:text-blue-400 p-0.5 opacity-0 group-hover:opacity-100 transition"
+                                              >
+                                                <Play className="h-3.5 w-3.5 fill-current" />
+                                              </button>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleDeleteScript(s, e);
+                                                }}
+                                                title="Delete project"
+                                                className="text-zinc-500 hover:text-rose-400 p-0.5 opacity-0 group-hover:opacity-100 transition"
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </button>
+                                            </div>
                                           </div>
                                         );
                                       })}
@@ -2666,16 +2778,29 @@ export default function App() {
                                               <span className="truncate font-medium">{s.name}</span>
                                               <span className="text-[8.5px] text-zinc-500 truncate mt-0.5">{s.ownerEmail?.split("@")[0]}</span>
                                             </div>
-                                            <button
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleMakeCopy(s);
-                                              }}
-                                              title="Clone project"
-                                              className="text-zinc-500 hover:text-blue-400 p-0.5 opacity-0 group-hover:opacity-100 transition shrink-0"
-                                            >
-                                              <Copy className="h-3 w-3" />
-                                            </button>
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleRunSpecificScript(s);
+                                                  setShowProjectDropdown(false);
+                                                }}
+                                                title="Run project script immediately"
+                                                className="text-zinc-500 hover:text-emerald-400 p-0.5 opacity-0 group-hover:opacity-100 transition"
+                                              >
+                                                <Play className="h-3.5 w-3.5 fill-current" />
+                                              </button>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleMakeCopy(s);
+                                                }}
+                                                title="Clone project"
+                                                className="text-zinc-500 hover:text-blue-400 p-0.5 opacity-0 group-hover:opacity-100 transition shrink-0"
+                                              >
+                                                <Copy className="h-3 w-3" />
+                                              </button>
+                                            </div>
                                           </div>
                                         );
                                       })}
@@ -3482,6 +3607,7 @@ export default function App() {
                   handleCreateFile={handleCreateFile}
                   handleRenameFile={handleRenameFile}
                   handleDeleteFile={handleDeleteFile}
+                  handleRunSpecificTemplate={handleRunSpecificTemplate}
                 />
               ) : sidebarTab === "history" ? (
                 <HistoryPanel

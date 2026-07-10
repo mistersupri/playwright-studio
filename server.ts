@@ -1865,18 +1865,15 @@ async function bootstrap() {
           }));
 
           broadcastPresence(roomId);
-        } else if (data.type === "code:update") {
-          const { code } = data;
-          if (currentRoomId && rooms.has(currentRoomId)) {
-            rooms.get(currentRoomId)!.forEach((presence, client) => {
-              if (client !== ws && client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({
-                  type: "code:update",
-                  code,
-                  senderId: clientId
-                }));
-              }
-            });
+
+          // Request current workspace state from existing clients if any
+          const otherClients = Array.from(rooms.get(roomId)!.keys()).filter(c => c !== ws);
+          if (otherClients.length > 0) {
+            // Send request to the first existing client
+            otherClients[0].send(JSON.stringify({
+              type: "workspace:request",
+              targetClientId: clientId
+            }));
           }
         } else if (data.type === "cursor:moved") {
           const { cursor } = data;
@@ -1886,6 +1883,18 @@ async function bootstrap() {
               clientPresence.cursor = cursor;
               broadcastPresence(currentRoomId);
             }
+          }
+        } else {
+          // General message forwarding to other clients in the same room (e.g. code:update, workspace:update, etc)
+          if (currentRoomId && rooms.has(currentRoomId)) {
+            rooms.get(currentRoomId)!.forEach((presence, client) => {
+              if (client !== ws && client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({
+                  ...data,
+                  senderId: clientId
+                }));
+              }
+            });
           }
         }
       } catch (err) {

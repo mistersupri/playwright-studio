@@ -1,0 +1,24 @@
+version: 52
+jobs:
+- name: build
+  jobExecutor: ghcr
+  steps:
+  - type: CheckoutStep
+    name: checkout
+    cloneCredential:
+      type: DefaultCredential
+    withLfs: false
+    withSubmodules: false
+    condition: SUCCESSFUL
+    optional: false
+  - type: BuildImageStep
+    name: build image
+    output:
+      type: RegistryOutput
+      tags: ghcr.io/@project_path@:@build_number@
+    condition: SUCCESSFUL
+    optional: false
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  timeout: 14400

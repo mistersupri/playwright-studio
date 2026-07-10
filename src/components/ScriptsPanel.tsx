@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, X, BookOpen, Database, FileCode, Trash2, Copy, Folder, FolderOpen, ChevronDown, ChevronRight, Plus, Edit, Check } from "lucide-react";
+import { Search, X, BookOpen, Database, FileCode, Trash2, Copy, Folder, FolderOpen, ChevronDown, ChevronRight, Plus, Edit, Check, Play } from "lucide-react";
 import { SavedScript, ScriptTemplate } from "../types";
 import { TEMPLATES } from "../data/templates";
 import { User } from "../firebase";
@@ -33,6 +33,7 @@ interface ScriptsPanelProps {
   handleCreateFile: (name: string) => void;
   handleRenameFile: (oldName: string, newName: string) => void;
   handleDeleteFile: (name: string) => void;
+  handleRunSpecificTemplate?: (tpl: ScriptTemplate) => void;
 }
 
 export default function ScriptsPanel({
@@ -64,6 +65,7 @@ export default function ScriptsPanel({
   handleCreateFile,
   handleRenameFile,
   handleDeleteFile,
+  handleRunSpecificTemplate,
 }: ScriptsPanelProps) {
   const [isCreatingFile, setIsCreatingFile] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
@@ -161,7 +163,7 @@ export default function ScriptsPanel({
 
     if (isFolder) {
       return (
-        <div key={node.path} className="select-none">
+        <div key={`folder-${node.path}`} className="select-none">
           <div
             onClick={() => toggleFolder(node.path)}
             className="flex items-center gap-1.5 py-1 px-1 rounded hover:bg-[#161b22] text-[#8b949e] hover:text-white cursor-pointer transition-colors text-xs"
@@ -193,7 +195,7 @@ export default function ScriptsPanel({
 
     return (
       <div
-        key={node.path}
+        key={`file-${node.path}`}
         onClick={() => {
           if (!isRenaming) {
             handleSwitchFile(node.path);
@@ -402,34 +404,48 @@ export default function ScriptsPanel({
                 <p className="text-[10px] text-[#8b949e] italic pl-1">No matching templates</p>
               );
             }
-            return filtered.map((tpl, idx) => (
-              <button
-                key={`template-${tpl.id || "no-id"}-${idx}`}
-                onClick={() => {
-                  handleSelectTemplate(tpl);
-                  setShowMobileSidebar(false);
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setContextMenu({
-                    x: e.clientX,
-                    y: e.clientY,
-                    script: tpl,
-                    isTemplate: true
-                  });
-                }}
-                className={`w-full text-left p-1.5 rounded text-xs transition border cursor-pointer block ${
-                  selectedTemplateId === tpl.id
-                    ? "bg-[#1f2937] border-[#30363d] text-white font-medium"
-                    : "bg-transparent border-transparent hover:bg-[#161b22] text-[#8b949e] hover:text-white"
-                }`}
-              >
-                <div className="truncate flex items-center justify-between">
-                  <span>{tpl.name}</span>
+            return filtered.map((tpl, idx) => {
+              const isSelected = selectedTemplateId === tpl.id;
+              return (
+                <div
+                  key={`template-${tpl.id || "no-id"}-${idx}`}
+                  onClick={() => {
+                    handleSelectTemplate(tpl);
+                    setShowMobileSidebar(false);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      script: tpl,
+                      isTemplate: true
+                    });
+                  }}
+                  className={`group w-full flex items-center justify-between p-1.5 rounded text-xs transition border cursor-pointer ${
+                    isSelected
+                      ? "bg-[#1f2937] border-[#30363d] text-white font-medium"
+                      : "bg-transparent border-transparent hover:bg-[#161b22] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  <span className="truncate flex-grow">{tpl.name}</span>
+                  {handleRunSpecificTemplate && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRunSpecificTemplate(tpl);
+                        setShowMobileSidebar(false);
+                      }}
+                      title="Run template immediately"
+                      className="text-[#8b949e] hover:text-blue-400 p-0.5 opacity-0 group-hover:opacity-100 transition shrink-0 ml-1.5"
+                    >
+                      <Play className="h-3.5 w-3.5 fill-current" />
+                    </button>
+                  )}
                 </div>
-              </button>
-            ));
+              );
+            });
           })()}
         </div>
       </div>
