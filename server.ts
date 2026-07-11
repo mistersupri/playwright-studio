@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { exec } from "child_process";
 import { getAuthUser } from "./server/services/googleAuth";
 import { encrypt, decrypt, decryptBuffer } from "./server/services/encryption";
-import { getUserWorkspaces, saveUserWorkspaces, getDecryptedEnvDict } from "./server/services/envStore";
+import { getUserWorkspaces, saveUserWorkspaces, getDecryptedEnvDict, saveSharedWorkspace, getSharedWorkspace } from "./server/services/envStore";
 import { getUserGeminiSettings, saveUserGeminiSettings } from "./server/services/geminiSettingsStore";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
@@ -592,6 +592,36 @@ app.post("/api/env/workspaces", async (req, res) => {
     }
     saveUserWorkspaces(user.uid, workspaces);
     res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint to share a specific environment workspace (Public or authenticated)
+app.post("/api/env/share", async (req, res) => {
+  try {
+    const { workspace } = req.body;
+    if (!workspace || !workspace.name) {
+      res.status(400).json({ error: "Workspace object is required and must have a name." });
+      return;
+    }
+    const shareId = saveSharedWorkspace(workspace);
+    res.json({ success: true, shareId });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint to retrieve a shared environment workspace
+app.get("/api/env/share/:shareId", async (req, res) => {
+  try {
+    const { shareId } = req.params;
+    const workspace = getSharedWorkspace(shareId);
+    if (!workspace) {
+      res.status(404).json({ error: "Shared environment workspace not found." });
+      return;
+    }
+    res.json(workspace);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

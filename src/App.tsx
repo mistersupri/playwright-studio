@@ -554,6 +554,12 @@ export default function App() {
 
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("default-ws");
 
+  // Shared Env Import Modal States
+  const [sharedEnvToImport, setSharedEnvToImport] = useState<any | null>(null);
+  const [importOption, setImportOption] = useState<"new" | "merge">("new");
+  const [importNewName, setImportNewName] = useState<string>("");
+  const [importTargetWorkspaceId, setImportTargetWorkspaceId] = useState<string>("default-ws");
+
   useEffect(() => {
     localStorage.setItem("playwright_env_workspaces", JSON.stringify(envWorkspaces));
     if (idToken) {
@@ -641,12 +647,13 @@ export default function App() {
 
   // Expanded states
   const [isFullscreenEditor, setIsFullscreenEditor] = useState<boolean>(false);
+  const [isFullscreenPreview, setIsFullscreenPreview] = useState<boolean>(false);
   const [versions, setVersions] = useState<ScriptVersion[]>([]);
   const [showVersionsDropdown, setShowVersionsDropdown] = useState<boolean>(false);
 
-  const sidebarActualWidth = isFullscreenEditor ? 0 : (isSidebarCollapsed ? 44 : sidebarWidth);
-  const previewActualWidth = (isFullscreenEditor || isMobile) ? 0 : (isPreviewCollapsed ? 42 : previewWidth);
-  const estimatedEditorWidth = isMobile ? windowWidth : (windowWidth - sidebarActualWidth - previewActualWidth);
+  const sidebarActualWidth = (isFullscreenEditor || isFullscreenPreview) ? 0 : (isSidebarCollapsed ? 44 : sidebarWidth);
+  const previewActualWidth = (isFullscreenEditor || isMobile) ? 0 : (isFullscreenPreview ? (windowWidth - sidebarActualWidth) : (isPreviewCollapsed ? 42 : previewWidth));
+  const estimatedEditorWidth = isMobile ? windowWidth : (isFullscreenPreview ? 0 : (windowWidth - sidebarActualWidth - previewActualWidth));
 
   // Collaborative edit references
   const wsRef = useRef<WebSocket | null>(null);
@@ -1006,6 +1013,35 @@ export default function App() {
         });
     }
   }, [user]); // re-evaluate when user authentication loads to print correct ownership copy advice
+
+  // Load shared environment workspace if env_share is provided in URL query parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const envShareId = params.get("env_share");
+    if (envShareId) {
+      addTerminalLine(`Shared Env: Requesting shared environment workspace details...`, "info");
+      fetch(`/api/env/share/${envShareId}`)
+        .then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            setSharedEnvToImport(data);
+            setImportNewName(`${data.name} (Shared)`);
+            setImportTargetWorkspaceId(activeWorkspaceId || "default-ws");
+            addTerminalLine(`Shared Env: Successfully fetched "${data.name}". Review and select project destination in the popup!`, "success");
+            
+            // Clean up the URL parameter gracefully
+            const newUrl = window.location.pathname + window.location.search.replace(/[\?&]env_share=[^&]+/, '').replace(/^&/, '?');
+            window.history.replaceState({}, '', newUrl);
+          } else {
+            const err = await res.json().catch(() => ({}));
+            addTerminalLine(`Shared Env: Failed loading environment: ${err.error || res.statusText}`, "error");
+          }
+        })
+        .catch((err) => {
+          addTerminalLine(`Shared Env: Connection failure during retrieve: ${err.message}`, "error");
+        });
+    }
+  }, []);
 
   const fetchDiagnostics = async () => {
     setCheckingDiagnostics(true);
@@ -1884,8 +1920,13 @@ export default function App() {
     addTerminalLine(`Deleted file: "${trimmed}"`, "warning");
   };
 
-  const handleSaveScript = async () => {
-    const nameToSave = scriptName.trim();
+  const handleSaveScript = async (
+    customName?: string, 
+    customCode?: string, 
+    customFiles?: { name: string, code: string }[],
+    overrideScriptId?: string | null
+  ) => {
+    const nameToSave = (customName !== undefined ? customName : scriptName).trim();
     if (!nameToSave) {
       alert("Please provide a valid script name to save.");
       return;
@@ -1902,15 +1943,17 @@ export default function App() {
       if (activeToken) {
         headers["Authorization"] = `Bearer ${activeToken}`;
       }
-      const entryCode = workspaceFiles.find(f => f.name === "main.js")?.code || currentCode;
+      const filesToSave = customFiles !== undefined ? customFiles : workspaceFiles;
+      const entryCode = filesToSave.find(f => f.name === "main.js")?.code || (customCode !== undefined ? customCode : currentCode);
+      const scriptIdToSave = overrideScriptId !== undefined ? overrideScriptId : activeScriptId;
       const res = await fetch("/api/scripts", {
         method: "POST",
         headers,
         body: JSON.stringify({
-          id: activeScriptId || undefined,
+          id: scriptIdToSave || undefined,
           name: nameToSave,
           code: entryCode,
-          files: workspaceFiles,
+          files: filesToSave,
           isPrivate: isPrivate
         })
       });
@@ -1922,7 +1965,7 @@ export default function App() {
         addTerminalLine(`Project "${nameToSave}" saved successfully (Encrypted in Cloud DB)`, "success");
         setActiveScriptId(saved.id);
         setVersions(saved.versions || []); // Populate versions list immediately
-        setOriginalCode(currentCode);
+        setOriginalCode(customCode !== undefined ? customCode : currentCode);
         setOriginalName(nameToSave);
         loadSavedScripts(activeToken || undefined);
       } else {
@@ -2598,10 +2641,10 @@ export default function App() {
   const activeSettingsCount = (skipCaptcha ? 1 : 0) + (binarizeCaptcha ? 1 : 0) + (useGeminiCaptcha ? 1 : 0) + (recordSession ? 1 : 0) + (isDebuggerMode ? 1 : 0);
 
   return (
-    <div className={`h-screen flex flex-col bg-[#0d1117] text-[#c9d1d9] font-sans overflow-hidden ${isFullscreenEditor ? "p-0 gap-0" : "pt-1.5 sm:pt-2 px-1.5 sm:px-2 pb-1.5 sm:pb-2 gap-1.5 sm:gap-2"}`} id="app-root">
+    <div className={`h-screen flex flex-col bg-[#0d1117] text-[#c9d1d9] font-sans overflow-hidden ${(isFullscreenEditor || isFullscreenPreview) ? "p-0 gap-0" : "pt-1.5 sm:pt-2 px-1.5 sm:px-2 pb-1.5 sm:pb-2 gap-1.5 sm:gap-2"}`} id="app-root">
       
       {/* Top Header Navigation */}
-      {!isFullscreenEditor && (
+      {!isFullscreenEditor && !isFullscreenPreview && (
       <header className="flex flex-col md:flex-row h-auto md:h-12 border border-[#30363d] rounded-lg items-stretch md:items-center justify-between px-3 sm:px-4 bg-[#161b22] shrink-0 py-2.5 md:py-0 gap-2.5 md:gap-0" id="header-nav">
         <div className="flex items-center justify-between md:justify-start gap-1.5 sm:gap-3 w-full md:w-auto">
           <div className="flex items-center gap-1.5 sm:gap-3">
@@ -3391,7 +3434,7 @@ export default function App() {
       )}
 
       {/* Mobile view selector tabs (hidden on desktop) */}
-      {!isFullscreenEditor && (
+      {!isFullscreenEditor && !isFullscreenPreview && (
       <div className="md:hidden flex h-10 border border-[#30363d] rounded-lg bg-[#161b22] shrink-0 text-xs font-medium overflow-x-auto whitespace-nowrap scrollbar-none" id="mobile-tabs-bar">
         <button 
           onClick={() => setMobileActiveView("editor")}
@@ -3436,13 +3479,13 @@ export default function App() {
         {/* Sidebar: Script Library & Templates & Packages */}
         <aside 
           className={`bg-[#0d1117] flex shrink-0 md:relative md:top-0 md:bottom-0 overflow-hidden ${
-            isFullscreenEditor ? "hidden" : "md:flex"
+            (isFullscreenEditor || isFullscreenPreview) ? "hidden" : "md:flex"
           } ${
             showMobileSidebar 
                ? "fixed inset-y-0 left-0 z-50 w-72 shadow-2xl border-r border-[#30363d] bg-[#0d1117] h-full" 
                : "hidden"
           } ${!showMobileSidebar ? "" : "w-72"}`} 
-          style={!showMobileSidebar && !isFullscreenEditor ? { 
+          style={!showMobileSidebar && !isFullscreenEditor && !isFullscreenPreview ? { 
             width: isSidebarCollapsed ? "44px" : `${sidebarWidth}px`, 
             minWidth: isSidebarCollapsed ? "44px" : `${sidebarWidth}px` 
           } : undefined}
@@ -3714,7 +3757,7 @@ export default function App() {
               </aside>
 
         {/* Sidebar Resize Handle (Desktop only) */}
-        {!showMobileSidebar && !isFullscreenEditor && (
+        {!showMobileSidebar && !isFullscreenEditor && !isFullscreenPreview && (
           <div
             onMouseDown={startResizeSidebar}
             className={`hidden md:block w-1.5 hover:w-2 hover:bg-blue-500/80 transition-all cursor-col-resize select-none h-full z-10 shrink-0 bg-transparent border-r border-[#30363d] relative`}
@@ -3760,7 +3803,9 @@ export default function App() {
             
             {/* Playwright Script Code Editor on Left */}
             <div 
-              className={`flex-1 flex flex-col min-w-0 min-h-0 md:flex ${
+              className={`flex-1 flex flex-col min-w-0 min-h-0 ${
+                isFullscreenPreview ? "hidden" : "md:flex"
+              } ${
                 isFullscreenEditor ? "border-r-0" : "border-r border-[#30363d]"
               } ${
                 mobileActiveView === "editor" ? "flex" : "hidden"
@@ -3933,7 +3978,7 @@ export default function App() {
             </div>
 
             {/* Preview Panel Resize Handle (Desktop only) */}
-            {!isFullscreenEditor && !isPreviewCollapsed && (
+            {!isFullscreenEditor && !isFullscreenPreview && !isPreviewCollapsed && (
               <div
                 onMouseDown={startResizePreview}
                 className={`hidden md:block w-1.5 hover:w-2 hover:bg-blue-500/80 transition-all cursor-col-resize select-none h-full z-10 shrink-0 bg-transparent border-l border-[#30363d] relative`}
@@ -3947,12 +3992,14 @@ export default function App() {
 
             {/* Browser Preview + Artifacts Section on Right */}
             <section 
-              className={`w-full flex flex-col bg-[#010409] shrink-0 min-h-0 ${
+              className={`w-full flex flex-col bg-[#010409] min-h-0 ${
+                isFullscreenPreview ? "flex-1" : "shrink-0"
+              } ${
                 isFullscreenEditor ? "hidden" : "md:flex"
               } ${
                 mobileActiveView === "preview" ? "flex" : "hidden"
               }`} 
-              style={(!isFullscreenEditor && !isMobile) ? { 
+              style={(!isFullscreenEditor && !isFullscreenPreview && !isMobile) ? { 
                 width: isPreviewCollapsed ? "42px" : `${previewWidth}px`, 
                 minWidth: isPreviewCollapsed ? "42px" : `${previewWidth}px` 
               } : undefined}
@@ -3992,15 +4039,15 @@ export default function App() {
                     return (
                       <div 
                         className={`flex border-b border-[#30363d] bg-[#161b22] px-3 shrink-0 ${
-                          isNarrowPreview 
+                          (isNarrowPreview && activeTab === "preview")
                             ? "flex-col items-stretch py-1.5 gap-1.5 h-auto" 
                             : "flex-row items-center justify-between h-10 gap-2"
                         }`} 
                         id="tabs-toolbar"
                       >
-                        {/* Left: Tab selectors */}
-                        <div className={`flex items-center justify-between gap-1 ${isNarrowPreview ? "w-full" : "w-auto"}`}>
-                          <div className="flex items-center gap-1">
+                        {/* Left: Tab selectors & Main Controls */}
+                        <div className={`flex items-center justify-between gap-1.5 ${isNarrowPreview ? "w-full" : "w-auto"}`}>
+                          <div className="flex items-center gap-1.5">
                             <button
                               onClick={() => setActiveTab("preview")}
                               className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs transition font-medium cursor-pointer shrink-0 ${
@@ -4028,6 +4075,31 @@ export default function App() {
                                 </span>
                               )}
                             </button>
+
+                            <span className="h-4 w-[1px] bg-[#30363d] mx-1 shrink-0" />
+
+                            {/* Fullscreen Live Browser & Assets Toggle Button */}
+                            <button
+                              onClick={() => setIsFullscreenPreview(prev => !prev)}
+                              className="p-1 text-[#8b949e] hover:text-white cursor-pointer select-none rounded hover:bg-[#30363d] shrink-0"
+                              title={isFullscreenPreview ? "Exit Fullscreen Preview" : "Fullscreen Preview"}
+                            >
+                              {isFullscreenPreview ? (
+                                <Minimize2 className="h-4 w-4 text-blue-400" />
+                              ) : (
+                                <Maximize2 className="h-4 w-4" />
+                              )}
+                            </button>
+
+                            {!isMobile && !isFullscreenPreview && (
+                              <button
+                                onClick={togglePreviewCollapsed}
+                                className="hidden sm:inline-flex p-1 px-1.5 text-[#8b949e] hover:text-white cursor-pointer select-none rounded hover:bg-[#30363d] shrink-0"
+                                title="Collapse Preview Panel"
+                              >
+                                <ChevronRight className="h-4 w-4 text-zinc-400" />
+                              </button>
+                            )}
                           </div>
 
                           {/* On mobile/tablet, show collapse button here next to tabs */}
@@ -4042,62 +4114,54 @@ export default function App() {
                           )}
                         </div>
 
-                        {/* Right: Presets & info */}
-                        <div className={`flex items-center justify-between gap-2 shrink-0 ${
-                          isNarrowPreview 
-                            ? "border-t border-[#30363d]/50 pt-1.5 w-full" 
-                            : "w-auto border-t-0 pt-0"
-                        }`}>
-                          <div className="flex items-center gap-1 bg-black/40 border border-[#30363d] rounded-md p-0.5 shrink-0">
-                            {(["Desktop", "Tablet", "Mobile"] as const).map((preset) => {
-                              const isSelected = 
-                                (preset === "Desktop" && viewportWidth === 1280) ||
-                                (preset === "Tablet" && viewportWidth === 768) ||
-                                (preset === "Mobile" && viewportWidth === 375);
-                              return (
-                                <button
-                                  key={preset}
-                                  onClick={() => {
-                                    if (preset === "Desktop") {
-                                      setViewportWidth(1280);
-                                      setViewportHeight(720);
-                                    } else if (preset === "Tablet") {
-                                      setViewportWidth(768);
-                                      setViewportHeight(1024);
-                                    } else if (preset === "Mobile") {
-                                      setViewportWidth(375);
-                                      setViewportHeight(812);
-                                    }
-                                  }}
-                                  className={`px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider rounded transition cursor-pointer ${
-                                    isSelected
-                                      ? "bg-amber-600/35 border border-amber-500/30 text-amber-400 font-bold"
-                                      : "text-zinc-400 hover:text-white hover:bg-[#30363d]/50"
-                                  }`}
-                                  title={`Set viewport to ${preset === "Desktop" ? "1280x720" : preset === "Tablet" ? "768x1024" : "375x812"}`}
-                                >
-                                  {preset}
-                                </button>
-                              );
-                            })}
-                          </div>
+                        {/* Right: Presets & info (Only for Live Browser tab) */}
+                        {activeTab === "preview" && (
+                          <div className={`flex items-center justify-between gap-2 shrink-0 ${
+                            isNarrowPreview 
+                              ? "border-t border-[#30363d]/50 pt-1.5 w-full" 
+                              : "w-auto border-t-0 pt-0"
+                          }`}>
+                            <div className="flex items-center gap-1 bg-black/40 border border-[#30363d] rounded-md p-0.5 shrink-0">
+                              {(["Desktop", "Tablet", "Mobile"] as const).map((preset) => {
+                                const isSelected = 
+                                  (preset === "Desktop" && viewportWidth === 1280) ||
+                                  (preset === "Tablet" && viewportWidth === 768) ||
+                                  (preset === "Mobile" && viewportWidth === 375);
+                                return (
+                                  <button
+                                    key={preset}
+                                    onClick={() => {
+                                      if (preset === "Desktop") {
+                                        setViewportWidth(1280);
+                                        setViewportHeight(720);
+                                      } else if (preset === "Tablet") {
+                                        setViewportWidth(768);
+                                        setViewportHeight(1024);
+                                      } else if (preset === "Mobile") {
+                                        setViewportWidth(375);
+                                        setViewportHeight(812);
+                                      }
+                                    }}
+                                    className={`px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider rounded transition cursor-pointer ${
+                                      isSelected
+                                        ? "bg-amber-600/35 border border-amber-500/30 text-amber-400 font-bold"
+                                        : "text-zinc-400 hover:text-white hover:bg-[#30363d]/50"
+                                    }`}
+                                    title={`Set viewport to ${preset === "Desktop" ? "1280x720" : preset === "Tablet" ? "768x1024" : "375x812"}`}
+                                  >
+                                    {preset}
+                                  </button>
+                                );
+                              })}
+                            </div>
 
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-[#8b949e] font-mono shrink-0">
-                              {viewportWidth}x{viewportHeight}
-                            </span>
-                            
-                            {!isMobile && (
-                              <button
-                                onClick={togglePreviewCollapsed}
-                                className="hidden sm:inline-flex p-1 px-1.5 text-[#8b949e] hover:text-white cursor-pointer select-none rounded hover:bg-[#30363d] shrink-0"
-                                title="Collapse Preview Panel"
-                              >
-                                <ChevronRight className="h-4 w-4 text-zinc-400" />
-                              </button>
-                            )}
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-[#8b949e] font-mono shrink-0">
+                                {viewportWidth}x{viewportHeight}
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
                     );
                   })()}
@@ -5415,7 +5479,7 @@ export default function App() {
           </div>
 
           {/* Console Resize Handle (Desktop only) */}
-          {!isFullscreenEditor && !isConsoleCollapsed && (
+          {!isFullscreenEditor && !isFullscreenPreview && !isConsoleCollapsed && (
             <div
               onMouseDown={startResizeConsole}
               className={`hidden md:block h-1.5 hover:h-2 hover:bg-blue-500/80 transition-all cursor-row-resize select-none w-full z-10 shrink-0 bg-transparent border-t border-[#30363d] relative`}
@@ -5430,11 +5494,11 @@ export default function App() {
           {/* Console Output Footer (Integrated) */}
           <div 
             className={`flex flex-col bg-[#161b22] ${
-              isFullscreenEditor ? "hidden" : "md:flex"
+              (isFullscreenEditor || isFullscreenPreview) ? "hidden" : "md:flex"
             } ${
               mobileActiveView === "console" ? "flex flex-grow h-full min-h-0 w-full" : "hidden"
             }`} 
-            style={!isFullscreenEditor && !isMobile ? { 
+            style={!isFullscreenEditor && !isFullscreenPreview && !isMobile ? { 
               height: isConsoleCollapsed ? "32px" : `${consoleHeight}px`, 
               minHeight: isConsoleCollapsed ? "32px" : `${consoleHeight}px` 
             } : undefined}
@@ -7481,6 +7545,178 @@ export default function App() {
           </div>
         )}
 
+        {sharedEnvToImport && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl max-w-md w-full p-6 text-left space-y-4 font-sans text-[#c9d1d9]"
+            >
+              <div className="flex items-center justify-between border-b border-[#30363d] pb-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 text-blue-400" />
+                  <span>Import Shared Environment Workspace</span>
+                </h3>
+                <button
+                  onClick={() => setSharedEnvToImport(null)}
+                  className="text-zinc-500 hover:text-white transition cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div className="p-3 bg-[#0d1117] rounded-lg border border-[#30363d] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-400 font-medium">Source Workspace Name:</span>
+                    <span className="text-xs text-white font-bold">{sharedEnvToImport.name}</span>
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-xs text-zinc-400 font-medium shrink-0">Included Keys:</span>
+                    <div className="flex flex-wrap gap-1 justify-end max-h-24 overflow-y-auto">
+                      {sharedEnvToImport.vars && sharedEnvToImport.vars.length > 0 ? (
+                        sharedEnvToImport.vars.map((v: any) => (
+                          <span key={`shared-key-${v.key}`} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#21262d] border border-[#30363d] text-zinc-300">
+                            {v.key}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-xs text-zinc-500 italic">No variables defined</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Import Strategy</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setImportOption("new")}
+                      className={`p-3 rounded-lg border text-left transition cursor-pointer flex flex-col justify-between gap-1 ${
+                        importOption === "new"
+                          ? "bg-blue-950/20 border-blue-500/80 text-white"
+                          : "bg-[#0d1117] border-[#30363d] text-zinc-400 hover:border-zinc-700"
+                      }`}
+                    >
+                      <span className="text-xs font-bold block">Create New</span>
+                      <span className="text-[9.5px] text-zinc-400 leading-normal">Creates a brand new workspace with these keys.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImportOption("merge")}
+                      className={`p-3 rounded-lg border text-left transition cursor-pointer flex flex-col justify-between gap-1 ${
+                        importOption === "merge"
+                          ? "bg-blue-950/20 border-blue-500/80 text-white"
+                          : "bg-[#0d1117] border-[#30363d] text-zinc-400 hover:border-zinc-700"
+                      }`}
+                    >
+                      <span className="text-xs font-bold block">Merge/Update</span>
+                      <span className="text-[9.5px] text-zinc-400 leading-normal">Merges shared keys into an existing workspace.</span>
+                    </button>
+                  </div>
+                </div>
+
+                {importOption === "new" ? (
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">New Workspace Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. My Shared Keys..."
+                      value={importNewName}
+                      onChange={(e) => setImportNewName(e.target.value)}
+                      className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#484f58] rounded px-3 py-2 text-xs font-semibold focus:outline-none placeholder-zinc-700 text-[#c9d1d9] transition-colors"
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Target Workspace</label>
+                    <select
+                      value={importTargetWorkspaceId}
+                      onChange={(e) => setImportTargetWorkspaceId(e.target.value)}
+                      className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#484f58] rounded px-3 py-2 text-xs font-semibold focus:outline-none text-[#c9d1d9] transition-colors cursor-pointer"
+                    >
+                      {envWorkspaces.map(ws => (
+                        <option key={`import-ws-target-${ws.id}`} value={ws.id}>
+                          {ws.name} ({ws.vars.length} vars)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#30363d]/50">
+                <button
+                  type="button"
+                  onClick={() => setSharedEnvToImport(null)}
+                  className="px-4 py-1.5 text-xs rounded bg-[#21262d] text-zinc-300 border border-[#30363d] hover:bg-[#30363d] hover:text-white transition-all font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (importOption === "new") {
+                      const trimmed = importNewName.trim() || sharedEnvToImport.name || "Imported Workspace";
+                      const newId = "ws-" + Math.random().toString(36).substring(2, 9);
+                      
+                      setEnvWorkspaces(prev => [...prev, {
+                        id: newId,
+                        name: trimmed,
+                        vars: sharedEnvToImport.vars.map((v: any) => ({
+                          id: v.id || Math.random().toString(36).substring(2, 9),
+                          key: v.key,
+                          value: v.value || "",
+                          isSecret: v.isSecret || false,
+                          isSaved: false
+                        }))
+                      }]);
+                      setActiveWorkspaceId(newId);
+                      addTerminalLine(`Imported shared workspace as a new project environment: "${trimmed}"`, "success");
+                    } else {
+                      setEnvWorkspaces(prev => prev.map(ws => {
+                        if (ws.id === importTargetWorkspaceId) {
+                          const updatedVars = [...ws.vars];
+                          sharedEnvToImport.vars.forEach((sharedVar: any) => {
+                            const existingIdx = updatedVars.findIndex(v => v.key === sharedVar.key);
+                            if (existingIdx !== -1) {
+                              updatedVars[existingIdx] = {
+                                ...updatedVars[existingIdx],
+                                value: sharedVar.value || "",
+                                isSecret: sharedVar.isSecret || false,
+                                isSaved: false
+                              };
+                            } else {
+                              updatedVars.push({
+                                id: Math.random().toString(36).substring(2, 9),
+                                key: sharedVar.key,
+                                value: sharedVar.value || "",
+                                isSecret: sharedVar.isSecret || false,
+                                isSaved: false
+                              });
+                            }
+                          });
+                          return { ...ws, vars: updatedVars };
+                        }
+                        return ws;
+                      }));
+                      setActiveWorkspaceId(importTargetWorkspaceId);
+                      const targetName = envWorkspaces.find(ws => ws.id === importTargetWorkspaceId)?.name || "Target Workspace";
+                      addTerminalLine(`Successfully merged ${sharedEnvToImport.vars?.length || 0} shared keys into workspace: "${targetName}"`, "success");
+                    }
+                    setSharedEnvToImport(null);
+                  }}
+                  className="px-4 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white transition-all font-semibold cursor-pointer shadow-sm shadow-blue-900/10"
+                >
+                  Import Workspace
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {showCreateProjectModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
@@ -7507,20 +7743,22 @@ export default function App() {
                     if (e.key === "Enter" && newProjectNameInput.trim()) {
                       const trimmed = newProjectNameInput.trim();
                       const newCode = `// New custom script\nawait page.goto("https://google.com");\nreturn { "success": true };`;
+                      const newId = "scr-" + Math.random().toString(36).substring(2, 11);
+
                       setScriptName(trimmed);
                       setCurrentCode(newCode);
                       setOriginalName(trimmed);
                       setOriginalCode(newCode);
                       setSelectedTemplateId("");
-                      setActiveScriptId(null);
+                      setActiveScriptId(newId);
                       setIsPrivate(true);
                       setWorkspaceFiles([{ name: "main.js", code: newCode }]);
                       setActiveFileName("main.js");
                       addTerminalLine(`Created fresh Project "${trimmed}"`, "success");
                       
-                      const newId = Math.random().toString(36).substring(2, 9);
-                      setEnvWorkspaces(prev => [...prev, { id: newId, name: trimmed, vars: [] }]);
-                      setActiveWorkspaceId(newId);
+                      if (user) {
+                        handleSaveScript(trimmed, newCode, [{ name: "main.js", code: newCode }], newId);
+                      }
                       
                       setShowCreateProjectModal(false);
                     } else if (e.key === "Escape") {
@@ -7543,20 +7781,22 @@ export default function App() {
                     const trimmed = newProjectNameInput.trim();
                     if (!trimmed) return;
                     const newCode = `// New custom script\nawait page.goto("https://google.com");\nreturn { "success": true };`;
+                    const newId = "scr-" + Math.random().toString(36).substring(2, 11);
+
                     setScriptName(trimmed);
                     setCurrentCode(newCode);
                     setOriginalName(trimmed);
                     setOriginalCode(newCode);
                     setSelectedTemplateId("");
-                    setActiveScriptId(null);
+                    setActiveScriptId(newId);
                     setIsPrivate(true);
                     setWorkspaceFiles([{ name: "main.js", code: newCode }]);
                     setActiveFileName("main.js");
                     addTerminalLine(`Created fresh Project "${trimmed}"`, "success");
                     
-                    const newId = Math.random().toString(36).substring(2, 9);
-                    setEnvWorkspaces(prev => [...prev, { id: newId, name: trimmed, vars: [] }]);
-                    setActiveWorkspaceId(newId);
+                    if (user) {
+                      handleSaveScript(trimmed, newCode, [{ name: "main.js", code: newCode }], newId);
+                    }
                     
                     setShowCreateProjectModal(false);
                   }}

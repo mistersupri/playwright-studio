@@ -141,3 +141,34 @@ export function getDecryptedEnvDict(userId: string, activeWorkspaceId: string, c
 
   return dict;
 }
+
+const SHARED_ENV_FILE = path.join(DATA_DIR, "shared_env_workspaces.json");
+
+export function saveSharedWorkspace(workspaceData: any): string {
+  ensureFile();
+  if (!fs.existsSync(SHARED_ENV_FILE)) {
+    fs.writeFileSync(SHARED_ENV_FILE, JSON.stringify({}), "utf8");
+  }
+  const shareId = "env-share-" + Math.random().toString(36).substring(2, 10);
+  const content = fs.readFileSync(SHARED_ENV_FILE, "utf8");
+  const allShared = JSON.parse(content) || {};
+  allShared[shareId] = {
+    id: workspaceData.id || Math.random().toString(36).substring(2, 9),
+    name: workspaceData.name,
+    vars: workspaceData.vars,
+    createdAt: new Date().toISOString()
+  };
+  fs.writeFileSync(SHARED_ENV_FILE, JSON.stringify(allShared, null, 2), "utf8");
+  return shareId;
+}
+
+export function getSharedWorkspace(shareId: string): any {
+  ensureFile();
+  if (!fs.existsSync(SHARED_ENV_FILE)) {
+    return null;
+  }
+  const content = fs.readFileSync(SHARED_ENV_FILE, "utf8");
+  const allShared = JSON.parse(content) || {};
+  return allShared[shareId] || null;
+}
+
