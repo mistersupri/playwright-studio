@@ -1328,7 +1328,7 @@ export default function App() {
     const item = currentWS.vars.find(v => v.id === envId);
     if (!item) return;
 
-    if (!item.key.trim()) {
+    if (!String(item.key || "").trim()) {
       alert("Please enter a valid Variable Key (e.g. TARGET_API_KEY).");
       return;
     }
@@ -1921,12 +1921,16 @@ export default function App() {
   };
 
   const handleSaveScript = async (
-    customName?: string, 
+    customName?: any, 
     customCode?: string, 
     customFiles?: { name: string, code: string }[],
     overrideScriptId?: string | null
   ) => {
-    const nameToSave = (customName !== undefined ? customName : scriptName).trim();
+    const nameToSave = String(
+      (customName !== undefined && typeof customName === "string") 
+        ? customName 
+        : (scriptName || "")
+    ).trim();
     if (!nameToSave) {
       alert("Please provide a valid script name to save.");
       return;
@@ -2078,10 +2082,10 @@ export default function App() {
       }
     }
 
-    const definedKeys = new Set(envs.map(ev => ev.key.trim()).filter(Boolean));
+    const definedKeys = new Set(envs.map(ev => String(ev?.key || "").trim()).filter(Boolean));
     for (const requiredVar of foundEnvVars) {
       const isDefined = definedKeys.has(requiredVar);
-      const envItem = envs.find(ev => ev.key.trim() === requiredVar);
+      const envItem = envs.find(ev => String(ev?.key || "").trim() === requiredVar);
       const isEmpty = envItem ? !envItem.value : true;
 
       if (!isDefined || isEmpty) {
@@ -2130,7 +2134,7 @@ export default function App() {
   };
 
   const handleRunScript = async (
-    bypassValidation = false,
+    bypassValidation: any = false,
     overrideCode?: string,
     overrideFiles?: { name: string; code: string }[],
     overrideScriptId?: string | null,
@@ -2143,7 +2147,9 @@ export default function App() {
     const scriptIdToRun = overrideScriptId !== undefined ? overrideScriptId : activeScriptId;
     const scriptNameToRun = overrideScriptName !== undefined ? overrideScriptName : scriptName;
 
-    if (!bypassValidation) {
+    const shouldBypass = typeof bypassValidation === "boolean" ? bypassValidation : false;
+
+    if (!shouldBypass) {
       const issues = performPreRunValidation(codeToRun, envVars);
       if (issues.length > 0) {
         setValidationIssues(issues);
@@ -2172,7 +2178,7 @@ export default function App() {
       }
       // Build a clean dictionary/key-value record of env variables
       const envDict = envVars.reduce((acc, curr) => {
-        const k = curr.key.trim();
+        const k = String(curr?.key || "").trim();
         if (k) {
           acc[k] = curr.value;
         }
@@ -2512,6 +2518,18 @@ export default function App() {
     await handleRunScript(true, tpl.code, files, tpl.id || null, tpl.name);
   };
 
+  const handleRunSpecificFile = async (fileName: string) => {
+    // 1. Find the file in workspace files
+    const file = workspaceFiles.find(f => f.name === fileName);
+    if (!file) return;
+
+    // 2. Switch to that file in the editor so editor/UI updates
+    handleSwitchFile(fileName);
+
+    // 3. Run the specific file with its code as override code, while passing current workspaceFiles
+    await handleRunScript(true, file.code, workspaceFiles, activeScriptId, `${scriptName || "Project"} - ${fileName}`);
+  };
+
   const handleClearArtifacts = async (type: string = "all") => {
     setClearType(type);
     setShowClearConfirm(true);
@@ -2657,12 +2675,23 @@ export default function App() {
               <BookOpen className="h-3.5 w-3.5" />
             </button>
             
-            <div className="w-5 h-5 sm:w-6 sm:h-6 bg-blue-500 rounded flex items-center justify-center text-white shrink-0">
-              <Sliders className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+            <div className="w-5 h-5 sm:w-6 sm:h-6 bg-[#0c0c0e] border border-zinc-800 rounded flex items-center justify-center shrink-0">
+              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" viewBox="0 0 128 128">
+                <defs>
+                  <linearGradient id="app-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#3b82f6" />
+                    <stop offset="100%" stopColor="#1d4ed8" />
+                  </linearGradient>
+                </defs>
+                <circle cx="64" cy="64" r="32" fill="none" stroke="url(#app-grad)" strokeWidth="8" opacity="0.8"/>
+                <circle cx="64" cy="64" r="16" fill="#ef4444" />
+                <path d="M 44 64 L 54 64" stroke="#94a3b8" strokeWidth="6" strokeLinecap="round"/>
+                <path d="M 74 64 L 84 64" stroke="#94a3b8" strokeWidth="6" strokeLinecap="round"/>
+              </svg>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-2">
               <h1 className="text-xs sm:text-sm font-semibold tracking-tight text-white shrink-0">
-                Playwright Studio
+                ScriptBench
               </h1>
               
               <div className="relative flex items-center">
@@ -2963,7 +2992,7 @@ export default function App() {
               </button>
             ) : (
               <button
-                onClick={handleRunScript}
+                onClick={() => handleRunScript()}
                 className="flex-initial shrink-0 px-2 sm:px-3 py-1 bg-[#238636] hover:bg-[#2ea043] text-white text-xs font-semibold rounded flex items-center justify-center gap-1 transition-colors cursor-pointer h-7"
               >
                 <Play className="h-3 w-3 fill-current" strokeWidth={3} />
@@ -3199,7 +3228,7 @@ export default function App() {
             <div className="relative flex items-center shrink-0">
               {/* Save Button */}
               <button
-                onClick={handleSaveScript}
+                onClick={() => handleSaveScript()}
                 disabled={savingScript}
                 className={`px-2 sm:px-3 py-1 text-xs font-semibold rounded-l border text-[#c9d1d9] flex items-center gap-1.5 transition-colors cursor-pointer border-r-0 h-7 shrink-0 disabled:opacity-50 select-none relative ${
                   hasUnsavedChanges 
@@ -3651,6 +3680,7 @@ export default function App() {
                   handleRenameFile={handleRenameFile}
                   handleDeleteFile={handleDeleteFile}
                   handleRunSpecificTemplate={handleRunSpecificTemplate}
+                  handleRunSpecificFile={handleRunSpecificFile}
                 />
               ) : sidebarTab === "history" ? (
                 <HistoryPanel
@@ -7576,9 +7606,9 @@ export default function App() {
                     <span className="text-xs text-zinc-400 font-medium shrink-0">Included Keys:</span>
                     <div className="flex flex-wrap gap-1 justify-end max-h-24 overflow-y-auto">
                       {sharedEnvToImport.vars && sharedEnvToImport.vars.length > 0 ? (
-                        sharedEnvToImport.vars.map((v: any) => (
-                          <span key={`shared-key-${v.key}`} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#21262d] border border-[#30363d] text-zinc-300">
-                            {v.key}
+                        sharedEnvToImport.vars.map((v: any, idx: number) => (
+                          <span key={`shared-key-${v.key || ""}-${v.id || idx}`} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#21262d] border border-[#30363d] text-zinc-300">
+                            {v.key || "UNNAMED"}
                           </span>
                         ))
                       ) : (
@@ -7637,8 +7667,8 @@ export default function App() {
                       onChange={(e) => setImportTargetWorkspaceId(e.target.value)}
                       className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#484f58] rounded px-3 py-2 text-xs font-semibold focus:outline-none text-[#c9d1d9] transition-colors cursor-pointer"
                     >
-                      {envWorkspaces.map(ws => (
-                        <option key={`import-ws-target-${ws.id}`} value={ws.id}>
+                      {envWorkspaces.map((ws, idx) => (
+                        <option key={`import-ws-target-${ws.id}-${idx}`} value={ws.id}>
                           {ws.name} ({ws.vars.length} vars)
                         </option>
                       ))}
@@ -7910,7 +7940,7 @@ export default function App() {
                         {/* Collapsible/scrollable HTML snippet */}
                         {opt.html && (
                           <div className="bg-black/40 border border-[#30363d]/50 rounded p-1.5 font-mono text-[9px] text-emerald-400 overflow-x-auto whitespace-pre select-all max-h-[60px]">
-                            {opt.html.trim()}
+                            {String(opt.html || "").trim()}
                           </div>
                         )}
                       </div>

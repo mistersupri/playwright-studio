@@ -34,6 +34,7 @@ interface ScriptsPanelProps {
   handleRenameFile: (oldName: string, newName: string) => void;
   handleDeleteFile: (name: string) => void;
   handleRunSpecificTemplate?: (tpl: ScriptTemplate) => void;
+  handleRunSpecificFile?: (fileName: string) => void;
 }
 
 export default function ScriptsPanel({
@@ -66,6 +67,7 @@ export default function ScriptsPanel({
   handleRenameFile,
   handleDeleteFile,
   handleRunSpecificTemplate,
+  handleRunSpecificFile,
 }: ScriptsPanelProps) {
   const [isCreatingFile, setIsCreatingFile] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
@@ -239,6 +241,18 @@ export default function ScriptsPanel({
 
         {!isRenaming && (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (handleRunSpecificFile) {
+                  handleRunSpecificFile(node.path);
+                }
+              }}
+              title={`Run ${node.name} immediately`}
+              className="text-zinc-500 hover:text-emerald-400 p-0.5 rounded transition cursor-pointer"
+            >
+              <Play className="h-3.5 w-3.5 fill-current" />
+            </button>
             {node.path !== "main.js" && (
               <>
                 <button

@@ -1,5 +1,5 @@
 {
-  "name": "Playwright Studio",
+  "name": "ScriptBench",
   "description": "A browser-based playground to write, run, and preview Playwright scripts with screenshots, logs, and a live preview.",
   "requestFramePermissions": [],
   "majorCapabilities": [

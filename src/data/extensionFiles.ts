@@ -374,6 +374,130 @@ document.addEventListener('blur', (event) => {
     console.warn('[Playwright Recorder] Blur listener error:', err);
   }
 }, true);
+
+// Selector picking listener and functions
+let isPickingSelector = false;
+let hoveredElement = null;
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'START_PICKING_SELECTOR') {
+    startSelectorPicker();
+    sendResponse({ status: 'picker_started' });
+  } else if (message.type === 'STOP_PICKING_SELECTOR') {
+    stopSelectorPicker();
+    sendResponse({ status: 'picker_stopped' });
+  }
+});
+
+function startSelectorPicker() {
+  if (isPickingSelector) return;
+  isPickingSelector = true;
+  
+  let pickerBanner = document.getElementById('scriptbench-picker-banner');
+  if (!pickerBanner) {
+    pickerBanner = document.createElement('div');
+    pickerBanner.id = 'scriptbench-picker-banner';
+    pickerBanner.style.cssText = 'position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: #1e293b; color: #f8fafc; padding: 10px 16px; border-radius: 8px; font-family: system-ui, -apple-system, sans-serif; font-size: 12px; font-weight: 600; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); z-index: 999999; display: flex; align-items: center; gap: 12px; border: 1px solid #38bdf8;';
+    pickerBanner.innerHTML = \`
+      <span style="display: flex; width: 8px; height: 8px; background: #38bdf8; border-radius: 50%; animation: scriptbench-pulse 1.5s infinite;"></span>
+      <span>Click any element to capture its CSS Selector</span>
+      <button id="scriptbench-cancel-pick" style="background: rgba(255,255,255,0.1); border: none; color: #cbd5e1; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 700; transition: all 0.2s;">Cancel</button>
+    \`;
+    document.body.appendChild(pickerBanner);
+    
+    if (!document.getElementById('scriptbench-picker-styles')) {
+      const style = document.createElement('style');
+      style.id = 'scriptbench-picker-styles';
+      style.innerHTML = \`
+        @keyframes scriptbench-pulse {
+          0% { opacity: 0.5; }
+          50% { opacity: 1; }
+          100% { opacity: 0.5; }
+        }
+        .scriptbench-hovered {
+          outline: 2px dashed #0ea5e9 !important;
+          outline-offset: 2px !important;
+          cursor: crosshair !important;
+        }
+      \`;
+      document.head.appendChild(style);
+    }
+    
+    document.getElementById('scriptbench-cancel-pick').addEventListener('click', (e) => {
+      e.stopPropagation();
+      stopSelectorPicker();
+    });
+  }
+  
+  document.addEventListener('mouseover', handlePickerMouseOver, true);
+  document.addEventListener('mouseout', handlePickerMouseOut, true);
+  document.addEventListener('click', handlePickerClick, true);
+}
+
+function stopSelectorPicker() {
+  isPickingSelector = false;
+  const banner = document.getElementById('scriptbench-picker-banner');
+  if (banner) banner.remove();
+  
+  if (hoveredElement) {
+    hoveredElement.classList.remove('scriptbench-hovered');
+    hoveredElement = null;
+  }
+  
+  document.removeEventListener('mouseover', handlePickerMouseOver, true);
+  document.removeEventListener('mouseout', handlePickerMouseOut, true);
+  document.removeEventListener('click', handlePickerClick, true);
+}
+
+function handlePickerMouseOver(e) {
+  if (!isPickingSelector) return;
+  e.stopPropagation();
+  e.preventDefault();
+  
+  if (hoveredElement && hoveredElement !== e.target) {
+    hoveredElement.classList.remove('scriptbench-hovered');
+  }
+  
+  hoveredElement = e.target;
+  if (hoveredElement && typeof hoveredElement.classList?.add === 'function') {
+    hoveredElement.classList.add('scriptbench-hovered');
+  }
+}
+
+function handlePickerMouseOut(e) {
+  if (!isPickingSelector) return;
+  if (e.target && typeof e.target.classList?.remove === 'function') {
+    e.target.classList.remove('scriptbench-hovered');
+  }
+}
+
+function handlePickerClick(e) {
+  if (!isPickingSelector) return;
+  e.stopPropagation();
+  e.preventDefault();
+  
+  const clickedEl = e.target;
+  if (clickedEl) {
+    const possibleSelectors = getPossibleSelectors(clickedEl);
+    const selector = possibleSelectors[0] || computeSelector(clickedEl);
+    
+    chrome.storage.local.set({ pickedSelector: selector }, () => {
+      const banner = document.getElementById('scriptbench-picker-banner');
+      if (banner) {
+        banner.style.border = '1px solid #10b981';
+        banner.innerHTML = \`
+          <span style="display: flex; width: 8px; height: 8px; background: #10b981; border-radius: 50%;"></span>
+          <span>Captured: <code style="background: rgba(0,0,0,0.2); padding: 2px 4px; border-radius: 4px;">\\\${selector.length > 25 ? selector.substring(0, 22) + '...' : selector}</code>!</span>
+        \`;
+        setTimeout(() => {
+          stopSelectorPicker();
+        }, 1500);
+      } else {
+        stopSelectorPicker();
+      }
+    });
+  }
+}
 `
   },
   {
@@ -983,7 +1107,13 @@ document.addEventListener('blur', (event) => {
 
             <!-- Dynamic Selector Field -->
             <div id="grpSelector" class="form-group">
-              <label class="form-label">CSS Selector</label>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label class="form-label" style="margin-bottom: 0;">CSS Selector</label>
+                <button type="button" id="pickSelectorBtn" style="font-size: 8.5px; font-weight: 700; background: rgba(37, 99, 235, 0.15); border: 1px solid rgba(37, 99, 235, 0.3); color: #60a5fa; padding: 2.5px 6px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 3px; font-family: ui-monospace, SFMono-Regular, monospace; transition: all 0.2s;">
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block;"><path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="m13 13 6 6"/></svg>
+                  Click selector to fill
+                </button>
+              </div>
               <input type="text" id="manualSelector" class="form-input" placeholder="e.g. #submit-btn or button">
             </div>
 
@@ -1087,6 +1217,7 @@ const lblText = document.getElementById('lblText');
 const manualText = document.getElementById('manualText');
 const grpPlaceholder = document.getElementById('grpPlaceholder');
 const manualPlaceholder = document.getElementById('manualPlaceholder');
+const pickSelectorBtn = document.getElementById('pickSelectorBtn');
 
 // Export Configs
 const exportLang = document.getElementById('exportLang');
@@ -1237,6 +1368,30 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
     state = response;
     updateUI();
   }
+
+  // Check if a selector was picked from the page
+  chrome.storage.local.get(['pickedSelector'], (result) => {
+    if (result && result.pickedSelector) {
+      const selector = result.pickedSelector;
+      manualSelector.value = selector;
+
+      // Auto expand accordion
+      accordionBody.classList.add('show');
+      accordionArrow.classList.add('rotated');
+
+      // Auto set action depending on target element tag type
+      const isInput = selector.includes('input') || selector.includes('textarea') || selector.includes('select');
+      if (isInput) {
+        manualAction.value = 'type';
+      } else {
+        manualAction.value = 'click';
+      }
+      manualAction.dispatchEvent(new Event('change'));
+
+      // Remove so it doesn't populate again on next open
+      chrome.storage.local.remove(['pickedSelector']);
+    }
+  });
 });
 
 // Synchronize state dynamically when updated from background or pages
@@ -1283,6 +1438,23 @@ clearBtn.addEventListener('click', () => {
     updateUI();
   });
 });
+
+if (pickSelectorBtn) {
+  pickSelectorBtn.addEventListener('click', () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0] && tabs[0].id) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'START_PICKING_SELECTOR' }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.warn("Could not communicate with tab:", chrome.runtime.lastError);
+          } else {
+            // Close popup so the user can click on the webpage
+            window.close();
+          }
+        });
+      }
+    });
+  });
+}
 
 // Code Exporter Listeners
 exportLang.addEventListener('change', updateCodeOutput);

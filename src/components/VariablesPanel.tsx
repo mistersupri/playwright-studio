@@ -93,8 +93,8 @@ export default function VariablesPanel({
               onChange={(e) => setActiveWorkspaceId(e.target.value)}
               className="w-full bg-[#0d1117] border border-[#30363d] hover:border-[#484f58] rounded px-2.5 py-1.5 text-xs text-white font-medium focus:outline-none transition cursor-pointer appearance-none pr-8 font-sans"
             >
-              {envWorkspaces.map(ws => (
-                <option key={`opt-ws-${ws.id}`} value={ws.id} className="bg-[#161b22] text-white">
+              {envWorkspaces.map((ws, idx) => (
+                <option key={`opt-ws-${ws.id}-${idx}`} value={ws.id} className="bg-[#161b22] text-white">
                   {ws.name} ({ws.vars.length} vars)
                 </option>
               ))}
