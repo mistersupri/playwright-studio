@@ -495,7 +495,7 @@ export async function runScript(
 
   const startTime = Date.now();
   
-  const workspaceDir = path.join(os.tmpdir(), `playwright-workspace-${runId}`);
+  const workspaceDir = path.join(process.cwd(), "temp_workspaces", `playwright-workspace-${runId}`);
 
   // Setup temporary files workspace
   try {
