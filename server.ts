@@ -1425,7 +1425,10 @@ app.get("/api/stream-run/:runId", (req, res) => {
     (eventData) => {
       sendEvent("choice_prompt", eventData);
     },
-    runDetails.files
+    runDetails.files,
+    (cookies) => {
+      sendEvent("cookies", cookies);
+    }
   )
     .then(async (result) => {
       sendEvent("done", { success: true, result });

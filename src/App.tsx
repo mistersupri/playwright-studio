@@ -113,7 +113,8 @@ export default function App() {
   const [runId, setRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "connecting" | "running" | "completed" | "error" | "stopped">("idle");
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
-  const [consoleTab, setConsoleTab] = useState<"logs" | "network">("logs");
+  const [consoleTab, setConsoleTab] = useState<"scripts" | "browser" | "network" | "cookies">("scripts");
+  const [browserCookies, setBrowserCookies] = useState<any[]>([]);
   const [networkLogs, setNetworkLogs] = useState<any[]>([]);
   const [selectedNetworkLog, setSelectedNetworkLog] = useState<any | null>(null);
   const [networkFilterText, setNetworkFilterText] = useState<string>("");
@@ -151,7 +152,7 @@ export default function App() {
   // Script Search, Console Clear, and Pre-Run Validation states
   const [scriptSearchQuery, setScriptSearchQuery] = useState<string>("");
   const [showConsoleClearConfirm, setShowConsoleClearConfirm] = useState<boolean>(false);
-  const [consoleClearType, setConsoleClearType] = useState<"logs" | "network">("logs");
+  const [consoleClearType, setConsoleClearType] = useState<"scripts" | "browser" | "network" | "cookies">("scripts");
   const [showValidationModal, setShowValidationModal] = useState<boolean>(false);
   const [validationIssues, setValidationIssues] = useState<{ type: "error" | "warning"; message: string; line?: number }[]>([]);
 
@@ -2162,6 +2163,7 @@ export default function App() {
     setTerminalLines([]);
     setNetworkLogs([]);
     setSelectedNetworkLog(null);
+    setBrowserCookies([]);
     setPreviewImage(null);
     setArtifacts([]);
     setPendingChoice(null);
@@ -2306,7 +2308,9 @@ export default function App() {
                     ...item,
                     status: data.status,
                     statusText: data.statusText,
-                    duration: data.duration
+                    duration: data.duration,
+                    headers: data.headers,
+                    body: data.body
                   };
                 }
                 return item;
@@ -2314,6 +2318,13 @@ export default function App() {
             }
             return prev;
           });
+        } catch (err) {}
+      });
+
+      es.addEventListener("cookies", (event: any) => {
+        try {
+          const cookiesList = JSON.parse(event.data);
+          setBrowserCookies(cookiesList);
         } catch (err) {}
       });
 
@@ -5539,18 +5550,38 @@ export default function App() {
               <div className="flex items-center gap-1.5 flex-wrap">
                 <div className="flex items-center gap-1 bg-black/40 border border-[#30363d] rounded-md p-0.5 select-none mr-2">
                   <button
-                    onClick={() => setConsoleTab("logs")}
-                    className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition cursor-pointer ${
-                      consoleTab === "logs"
+                    onClick={() => setConsoleTab("scripts")}
+                    className={`px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition cursor-pointer flex items-center gap-1 ${
+                      consoleTab === "scripts"
                         ? "bg-[#30363d] text-white"
                         : "text-zinc-400 hover:text-white"
                     }`}
                   >
-                    Console Logs
+                    <span>Scripts Logs</span>
+                    {terminalLines.filter(l => l.source === "script" || !l.source).length > 0 && (
+                      <span className="px-1 py-0.2 text-[8px] bg-zinc-700 text-zinc-300 rounded font-mono font-bold">
+                        {terminalLines.filter(l => l.source === "script" || !l.source).length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setConsoleTab("browser")}
+                    className={`px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition cursor-pointer flex items-center gap-1 ${
+                      consoleTab === "browser"
+                        ? "bg-[#30363d] text-white"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span>Browser Logs</span>
+                    {terminalLines.filter(l => l.source === "browser").length > 0 && (
+                      <span className="px-1 py-0.2 text-[8px] bg-amber-600/35 border border-amber-500/30 text-amber-400 rounded font-mono font-bold">
+                        {terminalLines.filter(l => l.source === "browser").length}
+                      </span>
+                    )}
                   </button>
                   <button
                     onClick={() => setConsoleTab("network")}
-                    className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition cursor-pointer flex items-center gap-1 ${
+                    className={`px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition cursor-pointer flex items-center gap-1 ${
                       consoleTab === "network"
                         ? "bg-[#30363d] text-white"
                         : "text-zinc-400 hover:text-white"
@@ -5558,14 +5589,29 @@ export default function App() {
                   >
                     <span>Network Logs</span>
                     {networkLogs.length > 0 && (
-                      <span className="px-1.5 py-0.2 text-[9px] bg-blue-600/35 border border-blue-500/30 text-blue-400 rounded-full font-mono font-bold">
+                      <span className="px-1.5 py-0.2 text-[8px] bg-blue-600/35 border border-blue-500/30 text-blue-400 rounded font-mono font-bold">
                         {networkLogs.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setConsoleTab("cookies")}
+                    className={`px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition cursor-pointer flex items-center gap-1 ${
+                      consoleTab === "cookies"
+                        ? "bg-[#30363d] text-white"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <span>Cookies</span>
+                    {browserCookies.length > 0 && (
+                      <span className="px-1 py-0.2 text-[8px] bg-emerald-600/35 border border-emerald-500/30 text-emerald-400 rounded font-mono font-bold">
+                        {browserCookies.length}
                       </span>
                     )}
                   </button>
                 </div>
 
-                {consoleTab === "logs" ? (
+                {(consoleTab === "scripts" || consoleTab === "browser") && (
                   <div className="flex items-center gap-2">
                     {/* Text Filter Input with integrated Regex filter mode trigger */}
                     <div className="relative flex items-center">
@@ -5620,7 +5666,9 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                ) : (
+                )}
+
+                {consoleTab === "network" && (
                   <div className="flex items-center gap-2">
                     {/* Network Filter controls */}
                     <input
@@ -5667,7 +5715,15 @@ export default function App() {
                     setShowConsoleClearConfirm(true);
                   }}
                   className="text-[#8b949e] hover:text-white hover:bg-[#161b22] p-1 rounded transition cursor-pointer"
-                  title={consoleTab === "logs" ? "Clear complete console log" : "Clear network logs"}
+                  title={
+                    consoleTab === "scripts"
+                      ? "Clear script logs"
+                      : consoleTab === "browser"
+                      ? "Clear browser console logs"
+                      : consoleTab === "network"
+                      ? "Clear network logs"
+                      : "Clear cookies"
+                  }
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -5684,7 +5740,7 @@ export default function App() {
               </div>
             </div>
 
-            {!isConsoleCollapsed && consoleTab === "logs" && (
+            {!isConsoleCollapsed && (consoleTab === "scripts" || consoleTab === "browser") && (
               <div className="flex-grow flex-1 p-3 font-mono text-[11.5px] overflow-y-auto space-y-1 bg-[#0d1117]" id="terminal-screen">
               {/* Playwright Install Alert Notification Banner */}
               {(() => {
@@ -5768,6 +5824,10 @@ export default function App() {
 
               {(() => {
                 const filtered = terminalLines.filter(line => {
+                  const lineSource = line.source || "script";
+                  const tabSource = consoleTab === "scripts" ? "script" : "browser";
+                  if (lineSource !== tabSource) return false;
+
                   const textSearch = consoleFilterText.trim();
                   let matchesText = true;
                   if (textSearch) {
@@ -5786,10 +5846,14 @@ export default function App() {
                   return matchesText && matchesSeverity;
                 });
 
-                if (terminalLines.length === 0) {
+                const sourceTotalCount = terminalLines.filter(line => (line.source || "script") === (consoleTab === "scripts" ? "script" : "browser")).length;
+
+                if (sourceTotalCount === 0) {
                   return (
                     <div className="text-[#8b949e] text-[11px] italic">
-                      [System] Console standing by. Press "Run Script" to stream Playwright metrics...
+                      {consoleTab === "scripts" 
+                        ? '[System] Script logs standing by. Press "Run Script" to stream execution logs...' 
+                        : '[System] Browser console is empty. Navigating or interactions in the script may stream browser console logs here...'}
                     </div>
                   );
                 }
@@ -6021,6 +6085,33 @@ export default function App() {
                       </div>
                     </div>
 
+                    {selectedNetworkLog.headers && Object.keys(selectedNetworkLog.headers).length > 0 && (
+                      <div className="pt-2 border-t border-[#30363d]/50">
+                        <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Response Headers</div>
+                        <div className="p-2 bg-[#0d1117] border border-[#30363d] rounded text-[9.5px] font-mono overflow-x-auto max-h-[150px] overflow-y-auto divide-y divide-[#161b22]">
+                          {Object.entries(selectedNetworkLog.headers).map(([k, v]) => (
+                            <div key={k} className="py-0.5 flex gap-1 select-all">
+                              <span className="text-zinc-500 shrink-0 font-bold">{k}:</span>
+                              <span className="text-zinc-300 break-all">{String(v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="pt-2 border-t border-[#30363d]/50">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Response Body</div>
+                      {selectedNetworkLog.body ? (
+                        <div className="p-2 bg-[#0d1117] border border-[#30363d] rounded text-[10px] font-mono overflow-x-auto max-h-[220px] overflow-y-auto break-all whitespace-pre-wrap select-all text-zinc-300">
+                          {selectedNetworkLog.body}
+                        </div>
+                      ) : (
+                        <div className="p-2 bg-[#0d1117] border border-[#30363d] rounded text-[10px] italic text-zinc-500 select-none">
+                          No response body captured. Only "document", "fetch", and "xhr" types are eligible for body text streaming.
+                        </div>
+                      )}
+                    </div>
+
                     <div className="pt-2 border-t border-[#30363d]/50">
                       <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Diagnostic Context</div>
                       <p className="text-[10px] text-zinc-400 leading-relaxed">
@@ -6030,6 +6121,79 @@ export default function App() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {!isConsoleCollapsed && consoleTab === "cookies" && (
+            <div className="flex-grow flex-1 flex flex-col min-h-0 bg-[#0d1117] overflow-hidden" id="cookies-panel">
+              <div className="flex-grow overflow-auto p-4">
+                <div className="max-w-full overflow-x-auto rounded-lg border border-[#30363d] bg-[#161b22]/45">
+                  <table className="w-full border-collapse text-left text-xs font-sans">
+                    <thead>
+                      <tr className="border-b border-[#30363d] bg-black/40 text-zinc-400 font-bold select-none text-[10.5px]">
+                        <th className="p-2.5">Name</th>
+                        <th className="p-2.5">Value</th>
+                        <th className="p-2.5">Domain</th>
+                        <th className="p-2.5">Path</th>
+                        <th className="p-2.5">Expires</th>
+                        <th className="p-2.5 text-center">HttpOnly</th>
+                        <th className="p-2.5 text-center">Secure</th>
+                        <th className="p-2.5">SameSite</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#30363d] font-mono text-[11px] text-zinc-300">
+                      {browserCookies.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="p-8 text-center text-zinc-500 italic font-sans text-xs">
+                            No browser cookies captured yet. Run a script to navigate and record cookies.
+                          </td>
+                        </tr>
+                      ) : (
+                        browserCookies.map((cookie, idx) => {
+                          const expiresDate = cookie.expires === -1 
+                            ? "Session" 
+                            : typeof cookie.expires === "number"
+                            ? new Date(cookie.expires * 1000).toLocaleString()
+                            : String(cookie.expires || "Session");
+
+                          return (
+                            <tr key={`${cookie.name}-${idx}`} className="hover:bg-[#161b22]/60 transition-colors">
+                              <td className="p-2.5 font-bold text-amber-400 select-all">{cookie.name}</td>
+                              <td className="p-2.5 max-w-[240px] truncate select-all text-zinc-200" title={cookie.value}>
+                                {cookie.value}
+                              </td>
+                              <td className="p-2.5 text-zinc-400 select-all">{cookie.domain}</td>
+                              <td className="p-2.5 text-zinc-400">{cookie.path}</td>
+                              <td className="p-2.5 text-zinc-400 text-[10px] whitespace-nowrap">{expiresDate}</td>
+                              <td className="p-2.5 text-center">
+                                {cookie.httpOnly ? (
+                                  <span className="inline-block px-1.5 py-0.2 text-[9px] font-bold rounded bg-blue-950/40 border border-blue-900/60 text-blue-400 font-sans">
+                                    HttpOnly
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-650 font-bold text-[10px] select-none">-</span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                {cookie.secure ? (
+                                  <span className="inline-block px-1.5 py-0.2 text-[9px] font-bold rounded bg-emerald-955/25 border border-emerald-900/60 text-emerald-400 font-sans">
+                                    Secure
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-650 font-bold text-[10px] select-none">-</span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-zinc-400 text-[10.5px] uppercase font-sans">
+                                {cookie.sameSite || "Lax"}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
           </div>
@@ -7322,12 +7486,22 @@ export default function App() {
               </div>
               <div className="space-y-1.5">
                 <h3 className="text-sm font-bold text-white">
-                  {consoleClearType === "logs" ? "Clear Console Logs?" : "Clear Network Logs?"}
+                  {consoleClearType === "scripts" 
+                    ? "Clear Script Logs?" 
+                    : consoleClearType === "browser" 
+                    ? "Clear Browser Console Logs?" 
+                    : consoleClearType === "network" 
+                    ? "Clear Network Logs?" 
+                    : "Clear Saved Cookies?"}
                 </h3>
                 <p className="text-[11px] text-[#8b949e]">
-                  {consoleClearType === "logs" 
-                    ? "Are you sure you want to clear all the terminal output and console run logs? This action cannot be undone." 
-                    : "Are you sure you want to clear all recorded network log entries? This action cannot be undone."}
+                  {consoleClearType === "scripts" 
+                    ? "Are you sure you want to clear all execution script run logs? This action cannot be undone." 
+                    : consoleClearType === "browser" 
+                    ? "Are you sure you want to clear all browser console messages and errors? This action cannot be undone." 
+                    : consoleClearType === "network" 
+                    ? "Are you sure you want to clear all recorded network log entries? This action cannot be undone." 
+                    : "Are you sure you want to clear all captured browser cookies? This action cannot be undone."}
                 </p>
               </div>
               <div className="flex items-center gap-2 pt-2">
@@ -7340,11 +7514,15 @@ export default function App() {
                 <button
                   onClick={() => {
                     setShowConsoleClearConfirm(false);
-                    if (consoleClearType === "logs") {
-                      setTerminalLines([]);
-                    } else {
+                    if (consoleClearType === "scripts") {
+                      setTerminalLines(prev => prev.filter(line => line.source !== "script"));
+                    } else if (consoleClearType === "browser") {
+                      setTerminalLines(prev => prev.filter(line => line.source !== "browser"));
+                    } else if (consoleClearType === "network") {
                       setNetworkLogs([]);
                       setSelectedNetworkLog(null);
+                    } else if (consoleClearType === "cookies") {
+                      setBrowserCookies([]);
                     }
                   }}
                   className="flex-1 px-4 py-2 text-xs rounded bg-red-650 hover:bg-red-550 text-white transition-all font-semibold cursor-pointer shadow-sm shadow-red-900/10"

@@ -50,6 +50,7 @@ export interface TerminalLine {
   message: string;
   timestamp: string;
   type: "info" | "success" | "warning" | "error" | "log";
+  source?: "script" | "browser";
 }
 
 export interface EnvWorkspace {

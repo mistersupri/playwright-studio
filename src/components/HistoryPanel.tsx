@@ -71,7 +71,8 @@ export default function HistoryPanel({
                     id: `hist-${idx}`,
                     message: log,
                     timestamp: new Date(run.createdAt).toLocaleTimeString(),
-                    type: log.startsWith("ERROR:") || log.startsWith("Error:") ? "error" : log.startsWith("Execution:") ? "info" : "log"
+                    type: log.startsWith("ERROR:") || log.startsWith("Error:") ? "error" : log.startsWith("Execution:") ? "info" : "log",
+                    source: (log.startsWith("Page Console") || log.startsWith("Page Error:") || log.startsWith("Console:") || log.startsWith("Navigation:")) ? "browser" : "script"
                   })));
                   setArtifacts(run.artifacts.map((art) => ({
                     ...art,

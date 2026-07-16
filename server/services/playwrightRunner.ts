@@ -461,7 +461,8 @@ export async function runScript(
   binarizeCaptcha?: boolean,
   useGeminiCaptcha?: boolean,
   onChoicePrompt?: (event: { options: any[] }) => void,
-  files?: { name: string; code: string }[]
+  files?: { name: string; code: string }[],
+  onCookies?: (cookies: any[]) => void
 ): Promise<any> {
   let instrumentedCode = code;
   if (isDebuggerMode && breakpoints && breakpoints.length > 0) {
@@ -548,7 +549,7 @@ export async function runScript(
 
   // Event handler references for cleanup
   let requestHandler: ((req: any) => void) | null = null;
-  let responseHandler: ((res: any) => void) | null = null;
+  let responseHandler: ((res: any) => Promise<void> | void) | null = null;
   let requestfailedHandler: ((req: any) => void) | null = null;
   let consoleHandler: ((msg: any) => void) | null = null;
   let pageerrorHandler: ((err: any) => void) | null = null;
@@ -585,6 +586,13 @@ export async function runScript(
   activeRuns.set(runId, runner);
 
   const cleanUp = async () => {
+    if (context && onCookies) {
+      try {
+        const cookiesList = await context.cookies();
+        onCookies(cookiesList);
+      } catch (e) {}
+    }
+
     active = false;
     if (previewInterval) {
       clearInterval(previewInterval);
@@ -851,14 +859,11 @@ export async function runScript(
         });
 
         // Log key network requests to the main terminal console
-        const isKeyRequest = ["document", "fetch", "xhr"].includes(resourceType);
-        if (isKeyRequest && !url.startsWith("data:")) {
-          onLog(`Network Request [${method}] [${resourceType}]: ${url.substring(0, 90)}${url.length > 90 ? '...' : ''}`);
-        }
+        // (Logging to script console removed per user request)
       } catch (err) {}
     };
 
-    responseHandler = (res) => {
+    responseHandler = async (res) => {
       try {
         if (!active || !page || page.isClosed()) return;
         const req = res.request();
@@ -868,6 +873,21 @@ export async function runScript(
           const status = res.status();
           const statusText = res.statusText();
           
+          let responseHeaders: Record<string, string> = {};
+          try {
+            responseHeaders = res.headers();
+          } catch (e) {}
+
+          let responseBody: string | undefined;
+          const isTextOrJson = ["document", "fetch", "xhr"].includes(reqInfo.resourceType);
+          if (isTextOrJson && status >= 200 && status < 300) {
+            try {
+              responseBody = await res.text();
+            } catch (e) {
+              // Body could be binary or failed to fetch
+            }
+          }
+
           onNetworkEvent({
             id: reqInfo.id,
             type: "response",
@@ -877,16 +897,12 @@ export async function runScript(
             status,
             statusText,
             duration,
-            timestamp: new Date().toLocaleTimeString()
+            timestamp: new Date().toLocaleTimeString(),
+            headers: responseHeaders,
+            body: responseBody
           });
 
-          const isKeyRequest = ["document", "fetch", "xhr"].includes(reqInfo.resourceType);
-          const isError = status >= 400;
-          if ((isKeyRequest || isError) && !reqInfo.url.startsWith("data:")) {
-            const statusStr = status;
-            const prefix = isError ? "ERROR: " : "";
-            onLog(`${prefix}Network Response [${statusStr}]: ${reqInfo.url.substring(0, 90)}${reqInfo.url.length > 90 ? '...' : ''} (${duration}ms)`);
-          }
+          // Logging to script console removed per user request
         }
       } catch (err) {}
     };
@@ -912,9 +928,7 @@ export async function runScript(
             timestamp: new Date().toLocaleTimeString()
           });
 
-          if (!reqInfo.url.startsWith("data:")) {
-            onLog(`ERROR: Network Response [FAILED]: ${reqInfo.url.substring(0, 90)}${reqInfo.url.length > 90 ? '...' : ''} (${errorText}, ${duration}ms)`);
-          }
+          // Logging to script console removed per user request
         }
       } catch (err) {}
     };
@@ -938,6 +952,11 @@ export async function runScript(
         if (!active || !page || page.isClosed()) return;
         if (frame === page?.mainFrame()) {
           onLog(`Navigation: Main frame navigated to: ${frame.url()}`);
+          if (context && onCookies) {
+            context.cookies().then(cookiesList => {
+              onCookies(cookiesList);
+            }).catch(() => {});
+          }
         }
       } catch (err) {}
     };
