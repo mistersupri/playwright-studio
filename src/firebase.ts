@@ -3,7 +3,7 @@ export interface User {
   email: string | null;
   displayName: string | null;
   photoURL: string | null;
-  getIdToken: () => Promise<string>;
+  getIdToken: (forceRefresh?: boolean) => Promise<string>;
 }
 
 type AuthStateCallback = (user: User | null) => void;
@@ -12,26 +12,87 @@ class CustomAuth {
   private callbacks: AuthStateCallback[] = [];
   private currentUser: User | null = null;
   private currentToken: string | null = null;
+  private refreshTokenVal: string | null = null;
+  private expiresAt: number = 0;
+  private refreshingPromise: Promise<string | null> | null = null;
 
   constructor() {
     // Restore persisted Google session on initialization
     try {
       const savedUser = localStorage.getItem("google_oauth_user");
       const savedToken = localStorage.getItem("google_oauth_token");
+      const savedRefreshToken = localStorage.getItem("google_oauth_refresh_token");
+      const savedExpiresAt = localStorage.getItem("google_oauth_expires_at");
+
       if (savedUser && savedToken) {
         const profile = JSON.parse(savedUser);
+        this.currentToken = savedToken;
+        this.refreshTokenVal = savedRefreshToken || null;
+        this.expiresAt = savedExpiresAt ? parseInt(savedExpiresAt, 10) : Date.now() + 3600000;
+
         this.currentUser = {
           uid: profile.uid,
           email: profile.email || null,
           displayName: profile.name || null,
           photoURL: profile.picture || null,
-          getIdToken: async () => savedToken,
+          getIdToken: async (forceRefresh?: boolean) => {
+            if (forceRefresh || (this.expiresAt && Date.now() >= this.expiresAt - 300000)) {
+              const freshToken = await this.refreshGoogleToken();
+              if (freshToken) return freshToken;
+            }
+            return this.currentToken || savedToken;
+          },
         };
-        this.currentToken = savedToken;
       }
     } catch (e) {
       console.error("Failed to restore saved Google OAuth session:", e);
     }
+  }
+
+  async refreshGoogleToken(): Promise<string | null> {
+    if (!this.refreshTokenVal) {
+      return this.currentToken;
+    }
+
+    if (this.refreshingPromise) {
+      return this.refreshingPromise;
+    }
+
+    this.refreshingPromise = (async () => {
+      try {
+        const res = await fetch("/api/auth/google/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: this.refreshTokenVal })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.token) {
+            this.currentToken = data.token;
+            const expiresInSec = data.expiresIn || 3600;
+            this.expiresAt = Date.now() + expiresInSec * 1000;
+
+            try {
+              localStorage.setItem("google_oauth_token", data.token);
+              localStorage.setItem("google_oauth_expires_at", String(this.expiresAt));
+            } catch (e) {
+              console.error("Failed to update refreshed token in localStorage:", e);
+            }
+
+            return data.token;
+          }
+        } else {
+          console.warn("Failed to refresh Google OAuth token from backend.");
+        }
+      } catch (err) {
+        console.error("Error calling /api/auth/google/refresh:", err);
+      } finally {
+        this.refreshingPromise = null;
+      }
+      return this.currentToken;
+    })();
+
+    return this.refreshingPromise;
   }
 
   onAuthStateChanged(callback: AuthStateCallback) {
@@ -48,18 +109,35 @@ class CustomAuth {
     this.callbacks.forEach(cb => cb(this.currentUser));
   }
 
-  setCurrentSession(token: string, profile: any) {
+  setCurrentSession(token: string, profile: any, refreshToken?: string, expiresIn?: number) {
     this.currentToken = token;
+    if (refreshToken) {
+      this.refreshTokenVal = refreshToken;
+    }
+    const expiresInSec = expiresIn || 3600;
+    this.expiresAt = Date.now() + expiresInSec * 1000;
+
     this.currentUser = {
       uid: profile.uid,
       email: profile.email || null,
       displayName: profile.name || null,
       photoURL: profile.picture || null,
-      getIdToken: async () => token,
+      getIdToken: async (forceRefresh?: boolean) => {
+        if (forceRefresh || (this.expiresAt && Date.now() >= this.expiresAt - 300000)) {
+          const freshToken = await this.refreshGoogleToken();
+          if (freshToken) return freshToken;
+        }
+        return this.currentToken || token;
+      },
     };
+
     try {
       localStorage.setItem("google_oauth_user", JSON.stringify(profile));
       localStorage.setItem("google_oauth_token", token);
+      if (this.refreshTokenVal) {
+        localStorage.setItem("google_oauth_refresh_token", this.refreshTokenVal);
+      }
+      localStorage.setItem("google_oauth_expires_at", String(this.expiresAt));
     } catch (e) {
       console.error("Failed to save Google session to localStorage:", e);
     }
@@ -69,9 +147,13 @@ class CustomAuth {
   clearSession() {
     this.currentUser = null;
     this.currentToken = null;
+    this.refreshTokenVal = null;
+    this.expiresAt = 0;
     try {
       localStorage.removeItem("google_oauth_user");
       localStorage.removeItem("google_oauth_token");
+      localStorage.removeItem("google_oauth_refresh_token");
+      localStorage.removeItem("google_oauth_expires_at");
     } catch (e) {
       console.error("Failed to remove Google session from localStorage:", e);
     }
@@ -123,7 +205,7 @@ export async function signInWithPopup(authInstance?: any, providerInstance?: any
         window.removeEventListener("message", handleMessage);
         if (checkClosedInterval) clearInterval(checkClosedInterval);
         
-        auth.setCurrentSession(data.token, data.user);
+        auth.setCurrentSession(data.token, data.user, data.refreshToken, data.expiresIn);
         resolve({ user: auth["currentUser"] });
       } else if (data && data.type === "OAUTH_AUTH_FAILURE") {
         window.removeEventListener("message", handleMessage);

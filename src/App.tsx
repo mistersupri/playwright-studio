@@ -299,8 +299,10 @@ export default function App() {
     }
   }, [compareSnapshot, activeFileName]);
 
-  // New States: Share Modal Dialog
+  // New States: Share & Download Project Modal Dialogs
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [showDownloadModal, setShowDownloadModal] = useState<boolean>(false);
+  const [isPackagingZip, setIsPackagingZip] = useState<boolean>(false);
   const [shareEmail, setShareEmail] = useState<string>("");
   const [sharingEmailStatus, setSharingEmailStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
   const [shareEmailMsg, setShareEmailMsg] = useState<string>("");
@@ -560,10 +562,11 @@ export default function App() {
   const [importOption, setImportOption] = useState<"new" | "merge">("new");
   const [importNewName, setImportNewName] = useState<string>("");
   const [importTargetWorkspaceId, setImportTargetWorkspaceId] = useState<string>("default-ws");
+  const hasLoadedEnvFromServerRef = useRef(false);
 
   useEffect(() => {
     localStorage.setItem("playwright_env_workspaces", JSON.stringify(envWorkspaces));
-    if (idToken) {
+    if (idToken && hasLoadedEnvFromServerRef.current) {
       saveEnvWorkspacesToServer(envWorkspaces);
     }
   }, [envWorkspaces, idToken]);
@@ -580,12 +583,15 @@ export default function App() {
       if (exists) {
         return prev.map(ws => ws.id === wsId ? { ...ws, name: wsName } : ws);
       } else {
+        // Pre-populate variables from default-ws for new script workspaces so user variables are preserved
+        const defaultWS = prev.find(ws => ws.id === "default-ws");
+        const initialVars = defaultWS ? defaultWS.vars.map(v => ({ ...v })) : [];
         return [
           ...prev,
           {
             id: wsId,
             name: wsName,
-            vars: []
+            vars: initialVars
           }
         ];
       }
@@ -796,6 +802,61 @@ export default function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  const authenticatedFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
+    let currentTok = idToken;
+    if (!currentTok && user) {
+      try {
+        currentTok = await user.getIdToken();
+        if (currentTok) setIdToken(currentTok);
+      } catch (e) {
+        console.error("Failed to get idToken in authenticatedFetch:", e);
+      }
+    }
+
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> || {})
+    };
+    if (currentTok) {
+      headers["Authorization"] = `Bearer ${currentTok}`;
+    }
+
+    let response = await fetch(url, { ...options, headers });
+
+    if (response.status === 401 && user) {
+      try {
+        console.warn("API returned 401 Unauthorized. Attempting Google token refresh...");
+        const freshToken = await user.getIdToken(true);
+        if (freshToken) {
+          setIdToken(freshToken);
+          headers["Authorization"] = `Bearer ${freshToken}`;
+          response = await fetch(url, { ...options, headers });
+        }
+      } catch (err) {
+        console.error("Failed to auto-refresh token after 401:", err);
+      }
+    }
+
+    return response;
+  };
+
+  // Periodically check and auto-refresh Google Auth Token before expiration
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+      try {
+        const freshToken = await user.getIdToken();
+        if (freshToken && freshToken !== idToken) {
+          setIdToken(freshToken);
+          console.log("Auto-refreshed Google Auth token successfully.");
+        }
+      } catch (e) {
+        console.error("Error auto-checking token expiration:", e);
+      }
+    }, 60000); // Check every 60 seconds
+
+    return () => clearInterval(interval);
+  }, [user, idToken]);
 
   // Listen to Google Auth Status Shifts and Token Changes
   useEffect(() => {
@@ -1104,7 +1165,7 @@ export default function App() {
       if (activeToken) {
         headers["Authorization"] = `Bearer ${activeToken}`;
       }
-      const res = await fetch("/api/scripts", { headers });
+      const res = await authenticatedFetch("/api/scripts", { headers });
       if (res.ok) {
         const data = await res.json();
         setScripts(data);
@@ -1122,7 +1183,7 @@ export default function App() {
     }
     setLoadingHistory(true);
     try {
-      const res = await fetch("/api/runs", {
+      const res = await authenticatedFetch("/api/runs", {
         headers: { "Authorization": `Bearer ${activeToken}` }
       });
       if (res.ok) {
@@ -1144,7 +1205,7 @@ export default function App() {
     }
     setLoadingSchedules(true);
     try {
-      const res = await fetch("/api/schedules", {
+      const res = await authenticatedFetch("/api/schedules", {
         headers: { "Authorization": `Bearer ${activeToken}` }
       });
       if (res.ok) {
@@ -1241,13 +1302,52 @@ export default function App() {
     const activeToken = token !== undefined ? token : idToken;
     if (!activeToken) return;
     try {
-      const res = await fetch("/api/env/workspaces", {
+      const res = await authenticatedFetch("/api/env/workspaces", {
         headers: { "Authorization": `Bearer ${activeToken}` }
       });
       if (res.ok) {
         const data = await res.json();
+        hasLoadedEnvFromServerRef.current = true;
         if (data && Array.isArray(data) && data.length > 0) {
-          setEnvWorkspaces(data);
+          setEnvWorkspaces(prevLocal => {
+            const mergedMap = new Map<string, EnvWorkspace>();
+
+            // 1. Add server workspaces
+            data.forEach((serverWS: EnvWorkspace) => {
+              mergedMap.set(serverWS.id, serverWS);
+            });
+
+            // 2. Merge local workspaces so local changes/new vars aren't lost
+            prevLocal.forEach((localWS: EnvWorkspace) => {
+              if (!mergedMap.has(localWS.id)) {
+                mergedMap.set(localWS.id, localWS);
+              } else {
+                const existingServerWS = mergedMap.get(localWS.id)!;
+                const varMap = new Map<string, any>();
+                existingServerWS.vars.forEach((v: any) => varMap.set(v.id || v.key, v));
+
+                localWS.vars.forEach((v: any) => {
+                  const keyOrId = v.id || v.key;
+                  if (!varMap.has(keyOrId)) {
+                    varMap.set(keyOrId, v);
+                  } else {
+                    const serverVar = varMap.get(keyOrId)!;
+                    if (!serverVar.isSaved && v.value) {
+                      varMap.set(keyOrId, v);
+                    }
+                  }
+                });
+
+                mergedMap.set(localWS.id, {
+                  ...existingServerWS,
+                  name: localWS.name || existingServerWS.name,
+                  vars: Array.from(varMap.values())
+                });
+              }
+            });
+
+            return Array.from(mergedMap.values());
+          });
         }
       }
     } catch (e) {
@@ -1259,7 +1359,7 @@ export default function App() {
     const activeToken = token !== undefined ? token : idToken;
     if (!activeToken) return;
     try {
-      const res = await fetch("/api/user/gemini-settings", {
+      const res = await authenticatedFetch("/api/user/gemini-settings", {
         headers: { "Authorization": `Bearer ${activeToken}` }
       });
       if (res.ok) {
@@ -1280,7 +1380,7 @@ export default function App() {
     setSavingGeminiSettings(true);
     setGeminiSettingsMessage(null);
     try {
-      const res = await fetch("/api/user/gemini-settings", {
+      const res = await authenticatedFetch("/api/user/gemini-settings", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1307,7 +1407,8 @@ export default function App() {
     const activeToken = token !== undefined ? token : idToken;
     if (!activeToken) return;
     try {
-      const res = await fetch("/api/env/workspaces", {
+      hasLoadedEnvFromServerRef.current = true;
+      const res = await authenticatedFetch("/api/env/workspaces", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1501,6 +1602,152 @@ export default function App() {
     } catch (err: any) {
       console.error("Failed to download script:", err);
       addTerminalLine(`Download Error: ${err.message}`, "error");
+    }
+  };
+
+  const handleDownloadProjectZip = async () => {
+    setIsPackagingZip(true);
+    try {
+      addTerminalLine("Download: Compiling full project files into ZIP package...", "info");
+      const zip = new JSZip();
+
+      // 1. Main active script file
+      const safeName = (scriptName || "main").replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      const mainFileName = safeName.endsWith(".js") || safeName.endsWith(".ts") ? safeName : `${safeName}.js`;
+      zip.file("main.js", currentCode || "// Empty script");
+      if (mainFileName !== "main.js") {
+        zip.file(mainFileName, currentCode || "// Empty script");
+      }
+
+      // 2. Multi-file workspace files
+      if (workspaceFiles && workspaceFiles.length > 0) {
+        const srcFolder = zip.folder("workspace_files");
+        workspaceFiles.forEach(file => {
+          srcFolder?.file(file.name, file.code);
+        });
+      }
+
+      // 3. Saved scripts in current user library
+      if (scripts && scripts.length > 0) {
+        const scriptsFolder = zip.folder("scripts");
+        scripts.forEach((s) => {
+          const sName = s.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+          const filename = sName.endsWith(".js") || sName.endsWith(".ts") ? sName : `${sName}.js`;
+          const content = `/**\n * Script: ${s.name}\n * Description: ${s.description || "No description"}\n * Private: ${s.isPrivate ? "Yes" : "No"}\n * Created: ${new Date(s.createdAt).toLocaleString()}\n */\n\n${s.code}`;
+          scriptsFolder?.file(filename, content);
+        });
+      }
+
+      // 4. package.json with dependencies
+      const detectedPkgs = getRequiredPackages(currentCode || "");
+      const packageJsonContent = {
+        name: (scriptName || "playwright-automation-project").toLowerCase().replace(/[^a-z0-9\-_]/g, "-"),
+        version: "1.0.0",
+        description: "Playwright Automation Script Bench Project Export",
+        main: "main.js",
+        scripts: {
+          "start": "node main.js",
+          "test": "npx playwright test"
+        },
+        dependencies: {
+          "playwright": "^1.40.0",
+          "dotenv": "^16.3.1",
+          ...detectedPkgs.reduce((acc: Record<string, string>, pkg: string) => {
+            acc[pkg] = "latest";
+            return acc;
+          }, {})
+        }
+      };
+      zip.file("package.json", JSON.stringify(packageJsonContent, null, 2));
+
+      // 5. Environment variables (.env & env.json)
+      const activeEnv = envWorkspaces.find(e => e.id === activeWorkspaceId) || envWorkspaces[0];
+      const envLines = ["# Playwright Environment Variables Export"];
+      if (activeEnv && activeEnv.vars) {
+        activeEnv.vars.forEach((v: { key: string; value: string }) => {
+          if (v.key) envLines.push(`${v.key}=${v.value || ""}`);
+        });
+      }
+      zip.file(".env", envLines.join("\n"));
+      zip.file("env.json", JSON.stringify(envWorkspaces, null, 2));
+
+      // 6. Schedules
+      if (schedules && schedules.length > 0) {
+        zip.file("schedules.json", JSON.stringify(schedules, null, 2));
+      }
+
+      // 7. Output assets / artifacts
+      if (artifacts && artifacts.length > 0) {
+        const outputFolder = zip.folder("outputs");
+        for (const art of artifacts) {
+          try {
+            const res = await fetch(`${art.url}?download=true`);
+            if (res.ok) {
+              const blob = await res.blob();
+              outputFolder?.file(art.name, blob);
+            }
+          } catch (e) {
+            console.warn("Could not include artifact in zip:", art.name, e);
+          }
+        }
+      }
+
+      // 8. README.md
+      const readmeContent = `# ${scriptName || "Playwright Automation Project"}
+
+Project exported from **ScriptBench / Playwright Automation IDE**.
+
+## 📁 Package Contents
+- \`main.js\`: Primary entrypoint script
+- \`scripts/\`: Folder containing all saved project scripts (${scripts.length} script(s))
+- \`workspace_files/\`: Multi-file workspace modules (${workspaceFiles.length} file(s))
+- \`package.json\`: Pre-configured dependencies including Playwright
+- \`.env\` & \`env.json\`: Environment variables
+- \`outputs/\`: Downloaded assets, screenshots, and CSV reports (${artifacts.length} file(s))
+
+## 🚀 How to Run Locally
+
+1. **Install Dependencies**:
+   \`\`\`bash
+   npm install
+   \`\`\`
+
+2. **Install Playwright Browser Binaries**:
+   \`\`\`bash
+   npx playwright install chromium
+   \`\`\`
+
+3. **Configure Environment**:
+   Verify secrets in \`.env\`.
+
+4. **Run Script**:
+   \`\`\`bash
+   npm start
+   \`\`\`
+
+---
+*Exported on ${new Date().toLocaleString()}*
+`;
+      zip.file("README.md", readmeContent);
+
+      // Generate & trigger browser download
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const zipUrl = URL.createObjectURL(zipBlob);
+      const link = document.createElement("a");
+      const zipFilename = `${(scriptName || "project").replace(/[^a-zA-Z0-9.\-_]/g, "_")}-project.zip`;
+      link.href = zipUrl;
+      link.download = zipFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(zipUrl);
+
+      addTerminalLine(`Download: Project files successfully packaged and downloaded as "${zipFilename}"!`, "success");
+    } catch (err: any) {
+      console.error("Failed to package project files:", err);
+      addTerminalLine(`Download Error: ${err.message || err}`, "error");
+    } finally {
+      setIsPackagingZip(false);
     }
   };
 
@@ -2165,7 +2412,6 @@ export default function App() {
     setSelectedNetworkLog(null);
     setBrowserCookies([]);
     setPreviewImage(null);
-    setArtifacts([]);
     setPendingChoice(null);
     setSelectedIndexes([]);
     setSubmittingChoice(false);
@@ -2271,9 +2517,9 @@ export default function App() {
             timestamp: new Date().toLocaleTimeString()
           };
           setArtifacts(prev => {
-            // Avoid duplicate additions
-            if (prev.some(a => a.url === artifact.url)) return prev;
-            return [...prev, artifact];
+            // Replace existing matching url with the updated artifact, otherwise append
+            const filtered = prev.filter(a => a.url !== artifact.url);
+            return [...filtered, artifact];
           });
           addTerminalLine(`Artifact detected: ${artifact.name} (${artifact.type.toUpperCase()})`, "success");
           
@@ -2346,12 +2592,14 @@ export default function App() {
         } catch (err) {}
         es.close();
         loadRunHistory();
+        loadArtifacts();
       });
 
       es.addEventListener("error", (event: any) => {
         addTerminalLine("Connection dropped or script timed out.", "error");
         setStatus("error");
         es.close();
+        loadArtifacts();
       });
 
     } catch (err: any) {
@@ -3381,6 +3629,16 @@ export default function App() {
               <Share2 className="h-3.5 w-3.5 shrink-0" />
               <span className="hidden xs:inline">Share</span>
             </button>
+
+            {/* Download Project Button */}
+            <button
+              onClick={() => setShowDownloadModal(true)}
+              className="px-2 sm:px-3 py-1 bg-[#238636] hover:bg-[#2ea043] text-white text-xs font-semibold rounded flex items-center justify-center gap-1 transition-all outline-none cursor-pointer h-7 shrink-0"
+              title="Download project files as ZIP archive"
+            >
+              <Download className="h-3.5 w-3.5 shrink-0 text-white" />
+              <span className="hidden xs:inline">Download Project</span>
+            </button>
           </div>
 
           {/* User Sign-In/Profile controls (visible ONLY on desktop in header-right) */}
@@ -3692,6 +3950,7 @@ export default function App() {
                   handleDeleteFile={handleDeleteFile}
                   handleRunSpecificTemplate={handleRunSpecificTemplate}
                   handleRunSpecificFile={handleRunSpecificFile}
+                  onDownloadProject={() => setShowDownloadModal(true)}
                 />
               ) : sidebarTab === "history" ? (
                 <HistoryPanel
@@ -3950,9 +4209,9 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={handleDownloadScript}
+                      onClick={() => setShowDownloadModal(true)}
                       className="px-2 py-1 sm:px-2.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-xs font-semibold text-[#c9d1d9] flex items-center gap-1 sm:gap-1.5 transition-all hover:text-white cursor-pointer shrink-0"
-                      title="Download current script code (.js/.ts) to local machine"
+                      title="Download project files (ZIP or .js)"
                     >
                       <Download className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
                       {estimatedEditorWidth >= 460 && <span className="ml-1">Download</span>}
@@ -5230,14 +5489,14 @@ export default function App() {
                           <p className="text-[10px] text-[#8b949e]">
                             Save excel or csv files into the excel folder. Open and inspect sheets directly here.
                           </p>
-                          {artifacts.filter(a => a.type === "excel").length === 0 ? (
+                          {filteredArtifacts.filter(a => a.type === "excel").length === 0 ? (
                             <div className="border border-dashed border-[#30363d] rounded-lg p-5 text-center flex flex-col items-center justify-center text-[#8b949e]">
                               <FileSpreadsheet className="h-5 w-5 mb-1 text-[#484f58]" />
                               <p className="text-[10px] italic">No excel sheets found in excel/ folder.</p>
                             </div>
                           ) : (
                             <div className="space-y-1.5">
-                              {artifacts
+                              {filteredArtifacts
                                 .filter(a => a.type === "excel")
                                 .map((art, idx) => (
                                   <div
@@ -5358,13 +5617,13 @@ export default function App() {
                           </div>
 
                           {/* Uploads list */}
-                          {artifacts.filter(a => a.type === "upload").length === 0 ? (
+                          {filteredArtifacts.filter(a => a.type === "upload").length === 0 ? (
                             <div className="border border-dashed border-[#30363d] rounded p-5 text-center text-[#8b949e]">
                               <p className="text-[10px] leading-relaxed italic animate-none">No uploaded input assets yet.</p>
                             </div>
                           ) : (
                             <div className="space-y-1.5">
-                              {artifacts
+                              {filteredArtifacts
                                 .filter(a => a.type === "upload")
                                 .map((art, idx) => (
                                   <div
@@ -5442,13 +5701,13 @@ export default function App() {
                             Session recordings are compiled in WebM video formats automatically at context closing if <span className="font-semibold text-white">Record Session</span> is enabled before running the script.
                           </p>
 
-                          {artifacts.filter(a => a.type === "video").length === 0 ? (
+                          {filteredArtifacts.filter(a => a.type === "video").length === 0 ? (
                             <div className="border border-dashed border-[#30363d] rounded p-5 text-center text-[#8b949e]">
                               <p className="text-[10px] leading-relaxed italic animate-none">No session video recordings yet.</p>
                             </div>
                           ) : (
                             <div className="space-y-1.5">
-                              {artifacts
+                              {filteredArtifacts
                                 .filter(a => a.type === "video")
                                 .map((art, idx) => (
                                   <div
@@ -6089,8 +6348,8 @@ export default function App() {
                       <div className="pt-2 border-t border-[#30363d]/50">
                         <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Response Headers</div>
                         <div className="p-2 bg-[#0d1117] border border-[#30363d] rounded text-[9.5px] font-mono overflow-x-auto max-h-[150px] overflow-y-auto divide-y divide-[#161b22]">
-                          {Object.entries(selectedNetworkLog.headers).map(([k, v]) => (
-                            <div key={k} className="py-0.5 flex gap-1 select-all">
+                          {Object.entries(selectedNetworkLog.headers).map(([k, v], hIdx) => (
+                            <div key={`net-header-${k}-${hIdx}`} className="py-0.5 flex gap-1 select-all">
                               <span className="text-zinc-500 shrink-0 font-bold">{k}:</span>
                               <span className="text-zinc-300 break-all">{String(v)}</span>
                             </div>
@@ -8148,6 +8407,146 @@ export default function App() {
                     )}
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Download Project Modal Dialog */}
+        {showDownloadModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#0d1117] border border-[#30363d] rounded-xl shadow-2xl max-w-lg w-full p-5 text-left space-y-4 font-sans text-[#c9d1d9] overflow-hidden flex flex-col"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-[#30363d] pb-3 shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-emerald-950/60 border border-emerald-800/80 rounded-lg text-emerald-400">
+                    <Download className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Download Project Files</h3>
+                    <p className="text-[10.5px] text-zinc-400">Export complete source code, workspace files, and environment configuration</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowDownloadModal(false)}
+                  className="text-zinc-400 hover:text-white transition cursor-pointer text-xs p-1"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Project Overview Card */}
+              <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-semibold border-b border-[#30363d]/60 pb-2">
+                  <span className="text-zinc-400 font-mono">Project Name:</span>
+                  <span className="text-emerald-400 font-bold">{scriptName || "Playwright Automation Project"}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
+                    <FileCode className="h-4 w-4 text-blue-400 shrink-0" />
+                    <div className="truncate">
+                      <div className="font-semibold text-white truncate">main.js</div>
+                      <div className="text-[10px] text-zinc-400">Main Script Entry</div>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
+                    <Folder className="h-4 w-4 text-amber-400 shrink-0" />
+                    <div className="truncate">
+                      <div className="font-semibold text-white truncate">{workspaceFiles?.length || 1} Workspace File(s)</div>
+                      <div className="text-[10px] text-zinc-400">Workspace Directory</div>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
+                    <BookOpen className="h-4 w-4 text-purple-400 shrink-0" />
+                    <div className="truncate">
+                      <div className="font-semibold text-white truncate">{scripts?.length || 0} Saved Script(s)</div>
+                      <div className="text-[10px] text-zinc-400">scripts/ Directory</div>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
+                    <Database className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <div className="truncate">
+                      <div className="font-semibold text-white truncate">package.json</div>
+                      <div className="text-[10px] text-zinc-400">Playwright & NPM Config</div>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
+                    <Lock className="h-4 w-4 text-yellow-400 shrink-0" />
+                    <div className="truncate">
+                      <div className="font-semibold text-white truncate">.env & env.json</div>
+                      <div className="text-[10px] text-zinc-400">Environment Variables</div>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
+                    <Check className="h-4 w-4 text-cyan-400 shrink-0" />
+                    <div className="truncate">
+                      <div className="font-semibold text-white truncate">README.md</div>
+                      <div className="text-[10px] text-zinc-400">Local Setup Instructions</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Information Notice */}
+              <div className="text-[11px] text-zinc-400 bg-blue-950/30 border border-blue-900/50 rounded-lg p-2.5 flex items-start gap-2">
+                <span className="text-blue-400 font-bold shrink-0 mt-0.5">ℹ️</span>
+                <p className="leading-relaxed">
+                  The downloaded ZIP archive is pre-configured for instant local execution with Node.js and Playwright. Run <code className="text-blue-300 font-mono bg-blue-950/60 px-1 py-0.5 rounded">npm install</code> followed by <code className="text-blue-300 font-mono bg-blue-950/60 px-1 py-0.5 rounded">npm start</code> to run your automation.
+                </p>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#30363d]/80">
+                <button
+                  onClick={() => setShowDownloadModal(false)}
+                  className="px-3.5 py-1.5 text-xs rounded bg-[#21262d] text-zinc-300 border border-[#30363d] hover:bg-[#30363d] hover:text-white transition-all font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleDownloadScript();
+                    setShowDownloadModal(false);
+                  }}
+                  className="px-3 py-1.5 text-xs rounded bg-[#21262d] text-zinc-200 border border-[#30363d] hover:bg-[#30363d] hover:text-white transition-all font-semibold cursor-pointer flex items-center gap-1.5"
+                  title="Download only the current script code as a single .js file"
+                >
+                  <FileCode className="h-3.5 w-3.5 text-blue-400" />
+                  <span>Script Only (.js)</span>
+                </button>
+
+                <button
+                  disabled={isPackagingZip}
+                  onClick={async () => {
+                    await handleDownloadProjectZip();
+                    setShowDownloadModal(false);
+                  }}
+                  className="px-4 py-1.5 text-xs rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold cursor-pointer shadow-sm transition-all flex items-center gap-1.5"
+                >
+                  {isPackagingZip ? (
+                    <>
+                      <span className="h-3 w-3 border-2 border-white border-t-transparent animate-spin rounded-full"></span>
+                      <span>Bundling ZIP...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-3.5 w-3.5" />
+                      <span>Download Project ZIP</span>
+                    </>
+                  )}
+                </button>
               </div>
             </motion.div>
           </div>

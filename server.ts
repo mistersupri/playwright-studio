@@ -728,7 +728,9 @@ app.get(["/auth/callback", "/auth/callback/"], async (req, res) => {
 
     const tokens = await tokenResponse.json();
     const accessToken = tokens.access_token;
+    const refreshToken = tokens.refresh_token || "";
     const idToken = tokens.id_token;
+    const expiresIn = tokens.expires_in || 3600;
 
     // Retrieve user details from Google userinfo API
     const userinfoResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
@@ -757,7 +759,9 @@ app.get(["/auth/callback", "/auth/callback/"], async (req, res) => {
               window.opener.postMessage({ 
                 type: 'OAUTH_AUTH_SUCCESS', 
                 token: '${accessToken}',
+                refreshToken: '${refreshToken}',
                 idToken: '${idToken || accessToken}',
+                expiresIn: ${expiresIn},
                 user: ${JSON.stringify(userPayload)}
               }, '*');
               window.close();
@@ -786,6 +790,49 @@ app.get(["/auth/callback", "/auth/callback/"], async (req, res) => {
         </body>
       </html>
     `);
+  }
+});
+
+// Refresh Google OAuth token endpoint
+app.post("/api/auth/google/refresh", async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+    if (!refresh_token) {
+      res.status(400).json({ error: "Refresh token is required." });
+      return;
+    }
+
+    const clientId = process.env.CLIENT_ID || "";
+    const clientSecret = process.env.CLIENT_SECRET || "";
+
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refresh_token,
+        grant_type: "refresh_token",
+      }).toString(),
+    });
+
+    if (!tokenResponse.ok) {
+      const errText = await tokenResponse.text();
+      res.status(400).json({ error: `Google token refresh failed: ${errText}` });
+      return;
+    }
+
+    const tokens = await tokenResponse.json();
+    res.json({
+      token: tokens.access_token,
+      idToken: tokens.id_token || tokens.access_token,
+      expiresIn: tokens.expires_in || 3600,
+    });
+  } catch (err: any) {
+    console.error("Token refresh route error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -7,6 +7,82 @@ import { encryptBuffer } from "./encryption";
 import { execSync } from "child_process";
 import { solveCaptcha, solveCaptchaFromBuffer, binarizeImage } from "./captchaSolver";
 
+const BUILTIN_MODULES = new Set([
+  "assert", "async_hooks", "buffer", "child_process", "cluster", "console",
+  "constants", "crypto", "dgram", "diagnostics_channel", "dns", "domain",
+  "events", "fs", "fs/promises", "http", "http2", "https", "inspector",
+  "module", "net", "os", "path", "path/posix", "path/win32", "perf_hooks",
+  "process", "punycode", "querystring", "readline", "repl", "stream",
+  "stream/promises", "stream/consumers", "stream/web", "string_decoder",
+  "sys", "timers", "timers/promises", "tls", "trace_events", "tty",
+  "url", "util", "v8", "vm", "wasi", "worker_threads", "zlib"
+]);
+
+const autoInstalledPackages = new Set<string>();
+
+function getCleanPackageName(specifier: string): string | null {
+  if (!specifier || specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("node:")) {
+    return null;
+  }
+  if (BUILTIN_MODULES.has(specifier)) {
+    return null;
+  }
+  if (specifier.startsWith("@")) {
+    const parts = specifier.split("/");
+    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+    return null;
+  }
+  return specifier.split("/")[0];
+}
+
+function transformImportsToRequires(sourceCode: string): string {
+  if (!sourceCode) return sourceCode;
+  
+  let transformed = sourceCode;
+
+  // Match import statements like: import { x } from 'pkg'; import x, { y } from 'pkg'; import * as x from 'pkg';
+  transformed = transformed.replace(
+    /import\s+(?:([\w$]+)\s*,?\s*)?(?:\{([^}]+)\})?\s*(?:\*\s+as\s+([\w$]+))?\s*from\s*['"]([^'"]+)['"]\s*;?/g,
+    (match, defaultImport, namedImports, starImport, modulePath) => {
+      let statements: string[] = [];
+      const tempVar = `_pkg_${Math.random().toString(36).substring(2, 8)}`;
+      statements.push(`const ${tempVar} = require('${modulePath}');`);
+
+      if (starImport) {
+        statements.push(`const ${starImport} = ${tempVar};`);
+      }
+      if (defaultImport) {
+        statements.push(`const ${defaultImport} = (${tempVar} && ${tempVar}.default !== undefined) ? ${tempVar}.default : ${tempVar};`);
+      }
+      if (namedImports) {
+        const transformedNamed = namedImports
+          .split(",")
+          .map((item: string) => {
+            const parts = item.trim().split(/\s+as\s+/);
+            if (parts.length === 2 && parts[0] && parts[1]) {
+              return `${parts[0].trim()}: ${parts[1].trim()}`;
+            }
+            return parts[0].trim();
+          })
+          .filter(Boolean)
+          .join(", ");
+        if (transformedNamed) {
+          statements.push(`const { ${transformedNamed} } = ${tempVar};`);
+        }
+      }
+      return statements.join(" ");
+    }
+  );
+
+  // Side-effect imports: import 'pkg';
+  transformed = transformed.replace(
+    /import\s+['"]([^'"]+)['"]\s*;?/g,
+    `require('$1');`
+  );
+
+  return transformed;
+}
+
 // Active runs registry to enable stopping them
 export interface ActiveRun {
   runId: string;
@@ -464,10 +540,10 @@ export async function runScript(
   files?: { name: string; code: string }[],
   onCookies?: (cookies: any[]) => void
 ): Promise<any> {
-  let instrumentedCode = code;
+  let instrumentedCode = transformImportsToRequires(code);
   if (isDebuggerMode && breakpoints && breakpoints.length > 0) {
     onLog(`Debugger: Instrumenting code with ${breakpoints.length} active breakpoints...`);
-    const lines = code.split("\n");
+    const lines = instrumentedCode.split("\n");
     const instrumentedLines = lines.map((lineText, index) => {
       const lineNum = index + 1;
       if (breakpoints.includes(lineNum)) {
@@ -1207,15 +1283,52 @@ export async function runScript(
     );
 
     // Execute script
-    let customRequire: any;
+    let wsRequire: any;
+    let rootRequire: any;
     try {
-      customRequire = createRequire(path.join(workspaceDir, "main.js"));
+      wsRequire = createRequire(path.join(workspaceDir, "main.js"));
     } catch {
+      wsRequire = createRequire(import.meta.url);
+    }
+    try {
+      rootRequire = createRequire(path.join(process.cwd(), "package.json"));
+    } catch {
+      rootRequire = wsRequire;
+    }
+
+    const customRequire: any = (moduleName: string) => {
       try {
-        customRequire = require;
-      } catch {
-        customRequire = createRequire(import.meta.url);
+        return wsRequire(moduleName);
+      } catch (wsErr: any) {
+        try {
+          return rootRequire(moduleName);
+        } catch (rootErr: any) {
+          const pkgToInstall = getCleanPackageName(moduleName);
+          if (pkgToInstall && !autoInstalledPackages.has(pkgToInstall) && /^[a-zA-Z0-9\-@\/._]+$/.test(pkgToInstall)) {
+            try {
+              onLog(`NPM: Module "${moduleName}" is not yet installed. Auto-installing "${pkgToInstall}"...`);
+              execSync(`npm install ${pkgToInstall}`, { cwd: process.cwd(), stdio: "ignore", timeout: 120000 });
+              autoInstalledPackages.add(pkgToInstall);
+              onLog(`NPM: Package "${pkgToInstall}" installed successfully!`);
+              const freshRootRequire = createRequire(path.join(process.cwd(), "package.json"));
+              return freshRootRequire(moduleName);
+            } catch (installErr: any) {
+              onLog(`NPM Error: Auto-install failed for "${pkgToInstall}": ${installErr.message || installErr}`);
+            }
+          }
+          throw wsErr;
+        }
       }
+    };
+    if (wsRequire) {
+      Object.assign(customRequire, wsRequire);
+      customRequire.resolve = (specifier: string, options?: any) => {
+        try {
+          return wsRequire.resolve(specifier, options);
+        } catch (e) {
+          return rootRequire.resolve(specifier, options);
+        }
+      };
     }
 
     const result = await fn(

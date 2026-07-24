@@ -82,7 +82,7 @@ export function saveUserWorkspaces(userId: string, incomingWorkspaces: ServerEnv
       id: ws.id,
       name: ws.name,
       vars: ws.vars.map(v => {
-        const existingVar = existingWs?.vars.find(ev => ev.id === v.id);
+        const existingVar = existingWs?.vars.find(ev => ev.id === v.id || (ev.key && ev.key === v.key));
         
         let finalValue = v.value;
         if (v.isSaved) {
@@ -106,7 +106,11 @@ export function saveUserWorkspaces(userId: string, incomingWorkspaces: ServerEnv
     };
   });
 
-  all[userId] = processedWorkspaces;
+  // Preserve any previously saved workspaces for this user that were NOT in incomingWorkspaces
+  const incomingIds = new Set(incomingWorkspaces.map(w => w.id));
+  const preservedWorkspaces = existingWorkspaces.filter(e => !incomingIds.has(e.id));
+
+  all[userId] = [...processedWorkspaces, ...preservedWorkspaces];
   writeAll(all);
 }
 
@@ -116,18 +120,25 @@ export function saveUserWorkspaces(userId: string, incomingWorkspaces: ServerEnv
 export function getDecryptedEnvDict(userId: string, activeWorkspaceId: string, clientDrafts: Record<string, string> = {}): Record<string, string> {
   const all = readAll();
   const workspaces = all[userId] || [];
-  const activeWs = workspaces.find(ws => ws.id === activeWorkspaceId);
   
   const dict: Record<string, string> = {};
 
-  if (activeWs) {
+  // First load default-ws variables as fallback base
+  const defaultWs = workspaces.find(ws => ws.id === "default-ws");
+  if (defaultWs) {
+    defaultWs.vars.forEach(v => {
+      if (v.key.trim()) {
+        dict[v.key.trim()] = v.isSaved ? decrypt(v.value) : v.value;
+      }
+    });
+  }
+
+  // Next overlay active workspace variables (overriding default if same key exists)
+  const activeWs = workspaces.find(ws => ws.id === activeWorkspaceId);
+  if (activeWs && activeWs.id !== "default-ws") {
     activeWs.vars.forEach(v => {
       if (v.key.trim()) {
-        if (v.isSaved) {
-          dict[v.key.trim()] = decrypt(v.value);
-        } else {
-          dict[v.key.trim()] = v.value;
-        }
+        dict[v.key.trim()] = v.isSaved ? decrypt(v.value) : v.value;
       }
     });
   }

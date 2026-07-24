@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, X, BookOpen, Database, FileCode, Trash2, Copy, Folder, FolderOpen, ChevronDown, ChevronRight, Plus, Edit, Check, Play } from "lucide-react";
+import { Search, X, BookOpen, Database, FileCode, Trash2, Copy, Folder, FolderOpen, ChevronDown, ChevronRight, Plus, Edit, Check, Play, Download } from "lucide-react";
 import { SavedScript, ScriptTemplate } from "../types";
 import { TEMPLATES } from "../data/templates";
 import { User } from "../firebase";
@@ -35,6 +35,7 @@ interface ScriptsPanelProps {
   handleDeleteFile: (name: string) => void;
   handleRunSpecificTemplate?: (tpl: ScriptTemplate) => void;
   handleRunSpecificFile?: (fileName: string) => void;
+  onDownloadProject?: () => void;
 }
 
 export default function ScriptsPanel({
@@ -68,6 +69,7 @@ export default function ScriptsPanel({
   handleDeleteFile,
   handleRunSpecificTemplate,
   handleRunSpecificFile,
+  onDownloadProject,
 }: ScriptsPanelProps) {
   const [isCreatingFile, setIsCreatingFile] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
@@ -129,7 +131,7 @@ export default function ScriptsPanel({
   const buildFileTree = (files: { name: string; code: string }[]) => {
     const root: Record<string, any> = {};
     files.forEach(file => {
-      const parts = file.name.split("/");
+      const parts = file.name.split("/").filter(Boolean);
       let current = root;
       let currentPath = "";
       parts.forEach((part, index) => {
@@ -142,8 +144,13 @@ export default function ScriptsPanel({
             isFile: isLast,
             children: isLast ? null : {}
           };
+        } else if (!isLast && current[part].isFile) {
+          current[part].isFile = false;
+          if (!current[part].children) {
+            current[part].children = {};
+          }
         }
-        if (!isLast) {
+        if (!isLast && current[part].children) {
           current = current[part].children;
         }
       });
@@ -151,7 +158,8 @@ export default function ScriptsPanel({
     return root;
   };
 
-  const renderNode = (node: any, depth: number = 0) => {
+  const renderNode = (node: any, depth: number = 0, nodeIdx: number = 0) => {
+    if (!node) return null;
     const isFolder = !node.isFile;
     const isExpanded = expandedFolders[node.path] !== false; // expanded by default
     const isActiveFile = node.isFile && activeFileName === node.path;
@@ -165,7 +173,7 @@ export default function ScriptsPanel({
 
     if (isFolder) {
       return (
-        <div key={`folder-${node.path}`} className="select-none">
+        <div key={`folder-${node.path || node.name || "dir"}-${depth}-${nodeIdx}`} className="select-none">
           <div
             onClick={() => toggleFolder(node.path)}
             className="flex items-center gap-1.5 py-1 px-1 rounded hover:bg-[#161b22] text-[#8b949e] hover:text-white cursor-pointer transition-colors text-xs"
@@ -185,7 +193,7 @@ export default function ScriptsPanel({
           </div>
           {isExpanded && node.children && (
             <div className="space-y-0.5 mt-0.5">
-              {Object.values(node.children).map((child: any) => renderNode(child, depth + 1))}
+              {Object.values(node.children).map((child: any, cIdx: number) => renderNode(child, depth + 1, cIdx))}
             </div>
           )}
         </div>
@@ -197,7 +205,7 @@ export default function ScriptsPanel({
 
     return (
       <div
-        key={`file-${node.path}`}
+        key={`file-${node.path || node.name || "file"}-${depth}-${nodeIdx}`}
         onClick={() => {
           if (!isRenaming) {
             handleSwitchFile(node.path);
@@ -322,13 +330,24 @@ export default function ScriptsPanel({
               {workspaceFiles.length} file{workspaceFiles.length !== 1 ? 's' : ''}
             </span>
           </div>
-          <button
-            onClick={() => setIsCreatingFile(true)}
-            title="Create new file (supports folders, e.g. utils/helper.js)"
-            className="text-[#8b949e] hover:text-white p-0.5 rounded transition cursor-pointer flex items-center gap-0.5 hover:bg-[#21262d] border border-transparent hover:border-[#30363d] px-1.5 text-[9px] font-normal"
-          >
-            <Plus className="h-3 w-3" /> Add File
-          </button>
+          <div className="flex items-center gap-1">
+            {onDownloadProject && (
+              <button
+                onClick={onDownloadProject}
+                title="Download all project files as ZIP archive"
+                className="text-emerald-400 hover:text-emerald-300 p-0.5 rounded transition cursor-pointer flex items-center gap-0.5 hover:bg-[#21262d] border border-transparent hover:border-[#30363d] px-1.5 text-[9px] font-normal"
+              >
+                <Download className="h-3 w-3" /> ZIP
+              </button>
+            )}
+            <button
+              onClick={() => setIsCreatingFile(true)}
+              title="Create new file (supports folders, e.g. utils/helper.js)"
+              className="text-[#8b949e] hover:text-white p-0.5 rounded transition cursor-pointer flex items-center gap-0.5 hover:bg-[#21262d] border border-transparent hover:border-[#30363d] px-1.5 text-[9px] font-normal"
+            >
+              <Plus className="h-3 w-3" /> Add File
+            </button>
+          </div>
         </div>
 
         {isCreatingFile && (
@@ -383,7 +402,7 @@ export default function ScriptsPanel({
         <div className="flex-grow overflow-y-auto space-y-0.5 pr-1 min-h-0">
           {(() => {
             const tree = buildFileTree(workspaceFiles);
-            return Object.values(tree).map((node: any) => renderNode(node));
+            return Object.values(tree).map((node: any, idx: number) => renderNode(node, 0, idx));
           })()}
         </div>
 

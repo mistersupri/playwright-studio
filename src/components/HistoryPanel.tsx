@@ -67,8 +67,8 @@ export default function HistoryPanel({
                 key={`run-history-${run.id || "no-id"}-${idx}`}
                 onClick={() => {
                   // Restore state from this decrypted historical record
-                  setTerminalLines(run.terminalLogs.map((log, idx) => ({
-                    id: `hist-${idx}`,
+                  setTerminalLines(run.terminalLogs.map((log, logIdx) => ({
+                    id: `hist-${run.id || "run"}-${logIdx}-${Math.random().toString(36).substring(2, 7)}`,
                     message: log,
                     timestamp: new Date(run.createdAt).toLocaleTimeString(),
                     type: log.startsWith("ERROR:") || log.startsWith("Error:") ? "error" : log.startsWith("Execution:") ? "info" : "log",
