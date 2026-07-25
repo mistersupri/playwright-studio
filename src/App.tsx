@@ -1608,127 +1608,30 @@ export default function App() {
   const handleDownloadProjectZip = async () => {
     setIsPackagingZip(true);
     try {
-      addTerminalLine("Download: Compiling full project files into ZIP package...", "info");
+      addTerminalLine("Download: Packaging displayed project files into ZIP archive...", "info");
       const zip = new JSZip();
 
-      // 1. Main active script file
-      const safeName = (scriptName || "main").replace(/[^a-zA-Z0-9.\-_]/g, "_");
-      const mainFileName = safeName.endsWith(".js") || safeName.endsWith(".ts") ? safeName : `${safeName}.js`;
-      zip.file("main.js", currentCode || "// Empty script");
-      if (mainFileName !== "main.js") {
-        zip.file(mainFileName, currentCode || "// Empty script");
+      // Gather displayed project files, syncing active editor code
+      const currentWorkspaceFiles = (workspaceFiles && workspaceFiles.length > 0)
+        ? workspaceFiles.map(f => f.name === activeFileName ? { ...f, code: currentCode } : f)
+        : [];
+
+      // If active file is not in workspaceFiles array yet, add it
+      if (activeFileName && !currentWorkspaceFiles.some(f => f.name === activeFileName)) {
+        currentWorkspaceFiles.push({ name: activeFileName, code: currentCode });
       }
 
-      // 2. Multi-file workspace files
-      if (workspaceFiles && workspaceFiles.length > 0) {
-        const srcFolder = zip.folder("workspace_files");
-        workspaceFiles.forEach(file => {
-          srcFolder?.file(file.name, file.code);
-        });
+      // Fallback if no files exist
+      if (currentWorkspaceFiles.length === 0) {
+        const safeName = (scriptName || "main").replace(/[^a-zA-Z0-9.\-_]/g, "_");
+        const mainFileName = safeName.endsWith(".js") || safeName.endsWith(".ts") ? safeName : `${safeName}.js`;
+        currentWorkspaceFiles.push({ name: mainFileName, code: currentCode || "// Empty script" });
       }
 
-      // 3. Saved scripts in current user library
-      if (scripts && scripts.length > 0) {
-        const scriptsFolder = zip.folder("scripts");
-        scripts.forEach((s) => {
-          const sName = s.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-          const filename = sName.endsWith(".js") || sName.endsWith(".ts") ? sName : `${sName}.js`;
-          const content = `/**\n * Script: ${s.name}\n * Description: ${s.description || "No description"}\n * Private: ${s.isPrivate ? "Yes" : "No"}\n * Created: ${new Date(s.createdAt).toLocaleString()}\n */\n\n${s.code}`;
-          scriptsFolder?.file(filename, content);
-        });
-      }
-
-      // 4. package.json with dependencies
-      const detectedPkgs = getRequiredPackages(currentCode || "");
-      const packageJsonContent = {
-        name: (scriptName || "playwright-automation-project").toLowerCase().replace(/[^a-z0-9\-_]/g, "-"),
-        version: "1.0.0",
-        description: "Playwright Automation Script Bench Project Export",
-        main: "main.js",
-        scripts: {
-          "start": "node main.js",
-          "test": "npx playwright test"
-        },
-        dependencies: {
-          "playwright": "^1.40.0",
-          "dotenv": "^16.3.1",
-          ...detectedPkgs.reduce((acc: Record<string, string>, pkg: string) => {
-            acc[pkg] = "latest";
-            return acc;
-          }, {})
-        }
-      };
-      zip.file("package.json", JSON.stringify(packageJsonContent, null, 2));
-
-      // 5. Environment variables (.env & env.json)
-      const activeEnv = envWorkspaces.find(e => e.id === activeWorkspaceId) || envWorkspaces[0];
-      const envLines = ["# Playwright Environment Variables Export"];
-      if (activeEnv && activeEnv.vars) {
-        activeEnv.vars.forEach((v: { key: string; value: string }) => {
-          if (v.key) envLines.push(`${v.key}=${v.value || ""}`);
-        });
-      }
-      zip.file(".env", envLines.join("\n"));
-      zip.file("env.json", JSON.stringify(envWorkspaces, null, 2));
-
-      // 6. Schedules
-      if (schedules && schedules.length > 0) {
-        zip.file("schedules.json", JSON.stringify(schedules, null, 2));
-      }
-
-      // 7. Output assets / artifacts
-      if (artifacts && artifacts.length > 0) {
-        const outputFolder = zip.folder("outputs");
-        for (const art of artifacts) {
-          try {
-            const res = await fetch(`${art.url}?download=true`);
-            if (res.ok) {
-              const blob = await res.blob();
-              outputFolder?.file(art.name, blob);
-            }
-          } catch (e) {
-            console.warn("Could not include artifact in zip:", art.name, e);
-          }
-        }
-      }
-
-      // 8. README.md
-      const readmeContent = `# ${scriptName || "Playwright Automation Project"}
-
-Project exported from **ScriptBench / Playwright Automation IDE**.
-
-## 📁 Package Contents
-- \`main.js\`: Primary entrypoint script
-- \`scripts/\`: Folder containing all saved project scripts (${scripts.length} script(s))
-- \`workspace_files/\`: Multi-file workspace modules (${workspaceFiles.length} file(s))
-- \`package.json\`: Pre-configured dependencies including Playwright
-- \`.env\` & \`env.json\`: Environment variables
-- \`outputs/\`: Downloaded assets, screenshots, and CSV reports (${artifacts.length} file(s))
-
-## 🚀 How to Run Locally
-
-1. **Install Dependencies**:
-   \`\`\`bash
-   npm install
-   \`\`\`
-
-2. **Install Playwright Browser Binaries**:
-   \`\`\`bash
-   npx playwright install chromium
-   \`\`\`
-
-3. **Configure Environment**:
-   Verify secrets in \`.env\`.
-
-4. **Run Script**:
-   \`\`\`bash
-   npm start
-   \`\`\`
-
----
-*Exported on ${new Date().toLocaleString()}*
-`;
-      zip.file("README.md", readmeContent);
+      // Add ONLY displayed project files to the root of the ZIP
+      currentWorkspaceFiles.forEach(file => {
+        zip.file(file.name, file.code);
+      });
 
       // Generate & trigger browser download
       const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -1742,7 +1645,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
       document.body.removeChild(link);
       URL.revokeObjectURL(zipUrl);
 
-      addTerminalLine(`Download: Project files successfully packaged and downloaded as "${zipFilename}"!`, "success");
+      addTerminalLine(`Download: Displayed project files successfully packaged and downloaded as "${zipFilename}"!`, "success");
     } catch (err: any) {
       console.error("Failed to package project files:", err);
       addTerminalLine(`Download Error: ${err.message || err}`, "error");
@@ -8436,7 +8339,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-white">Download Project Files</h3>
-                    <p className="text-[10.5px] text-zinc-400">Export complete source code, workspace files, and environment configuration</p>
+                    <p className="text-[10.5px] text-zinc-400">Unduh berkas project yang ditampilkan sebagai arsip ZIP</p>
                   </div>
                 </div>
                 <button
@@ -8454,53 +8357,22 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
                   <span className="text-emerald-400 font-bold">{scriptName || "Playwright Automation Project"}</span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-[11px]">
-                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
-                    <FileCode className="h-4 w-4 text-blue-400 shrink-0" />
-                    <div className="truncate">
-                      <div className="font-semibold text-white truncate">main.js</div>
-                      <div className="text-[10px] text-zinc-400">Main Script Entry</div>
-                    </div>
+                <div className="space-y-1.5 text-[11px]">
+                  <div className="text-[#8b949e] font-semibold text-[10.5px] mb-1">
+                    Files to be downloaded ({workspaceFiles?.length || 1} file(s)):
                   </div>
-
-                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
-                    <Folder className="h-4 w-4 text-amber-400 shrink-0" />
-                    <div className="truncate">
-                      <div className="font-semibold text-white truncate">{workspaceFiles?.length || 1} Workspace File(s)</div>
-                      <div className="text-[10px] text-zinc-400">Workspace Directory</div>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
-                    <BookOpen className="h-4 w-4 text-purple-400 shrink-0" />
-                    <div className="truncate">
-                      <div className="font-semibold text-white truncate">{scripts?.length || 0} Saved Script(s)</div>
-                      <div className="text-[10px] text-zinc-400">scripts/ Directory</div>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
-                    <Database className="h-4 w-4 text-emerald-400 shrink-0" />
-                    <div className="truncate">
-                      <div className="font-semibold text-white truncate">package.json</div>
-                      <div className="text-[10px] text-zinc-400">Playwright & NPM Config</div>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
-                    <Lock className="h-4 w-4 text-yellow-400 shrink-0" />
-                    <div className="truncate">
-                      <div className="font-semibold text-white truncate">.env & env.json</div>
-                      <div className="text-[10px] text-zinc-400">Environment Variables</div>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#0d1117] p-2 border border-[#30363d]/60 rounded flex items-center gap-2">
-                    <Check className="h-4 w-4 text-cyan-400 shrink-0" />
-                    <div className="truncate">
-                      <div className="font-semibold text-white truncate">README.md</div>
-                      <div className="text-[10px] text-zinc-400">Local Setup Instructions</div>
-                    </div>
+                  <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
+                    {(workspaceFiles && workspaceFiles.length > 0 ? workspaceFiles : [{ name: "main.js" }]).map((f, i) => (
+                      <div key={i} className="bg-[#0d1117] px-2.5 py-1.5 border border-[#30363d]/60 rounded flex items-center justify-between">
+                        <div className="flex items-center gap-2 truncate">
+                          <FileCode className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                          <span className="font-mono text-white text-xs truncate">{f.name}</span>
+                        </div>
+                        {f.name === activeFileName && (
+                          <span className="text-[9.5px] bg-emerald-950/80 text-emerald-400 px-1.5 py-0.5 border border-emerald-800/60 rounded">Active</span>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -8509,7 +8381,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
               <div className="text-[11px] text-zinc-400 bg-blue-950/30 border border-blue-900/50 rounded-lg p-2.5 flex items-start gap-2">
                 <span className="text-blue-400 font-bold shrink-0 mt-0.5">ℹ️</span>
                 <p className="leading-relaxed">
-                  The downloaded ZIP archive is pre-configured for instant local execution with Node.js and Playwright. Run <code className="text-blue-300 font-mono bg-blue-950/60 px-1 py-0.5 rounded">npm install</code> followed by <code className="text-blue-300 font-mono bg-blue-950/60 px-1 py-0.5 rounded">npm start</code> to run your automation.
+                  Arsip ZIP ini hanya berisi berkas-berkas project yang ditampilkan dalam ruang kerja. Berkas tambahan seperti <code className="text-blue-300 font-mono bg-blue-950/60 px-1 py-0.5 rounded">package.json</code>, <code className="text-blue-300 font-mono bg-blue-950/60 px-1 py-0.5 rounded">.env</code>, dan folder luaran tidak ikut diunduh.
                 </p>
               </div>
 
