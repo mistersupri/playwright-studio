@@ -2969,11 +2969,12 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
 
                 <AnimatePresence>
                   {showProjectDropdown && (
-                    <>
+                    <React.Fragment key="project-dropdown-fragment">
                       {/* Click outside backdrop */}
-                      <div className="fixed inset-0 z-40" onClick={() => setShowProjectDropdown(false)} />
+                      <div key="project-dropdown-backdrop" className="fixed inset-0 z-40" onClick={() => setShowProjectDropdown(false)} />
                       
                       <motion.div
+                        key="project-dropdown-content"
                         initial={{ opacity: 0, y: 10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -3144,7 +3145,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
 
                         </div>
                       </motion.div>
-                    </>
+                    </React.Fragment>
                   )}
                 </AnimatePresence>
               </div>
@@ -3285,9 +3286,10 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
 
               <AnimatePresence>
                 {showConfigDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowConfigDropdown(false)} />
+                  <React.Fragment key="config-dropdown-fragment">
+                    <div key="config-dropdown-backdrop" className="fixed inset-0 z-40" onClick={() => setShowConfigDropdown(false)} />
                     <motion.div
+                      key="config-dropdown-content"
                       initial={{ opacity: 0, y: 10, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -3477,7 +3479,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
                         </div>
                       </div>
                     </motion.div>
-                  </>
+                  </React.Fragment>
                 )}
               </AnimatePresence>
             </div>
@@ -3524,6 +3526,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
               <AnimatePresence>
                 {showVersionsDropdown && (
                   <motion.div
+                    key="versions-dropdown-menu"
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -4429,7 +4432,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
                                   (preset === "Mobile" && viewportWidth === 375);
                                 return (
                                   <button
-                                    key={preset}
+                                    key={`viewport-preset-${preset}`}
                                     onClick={() => {
                                       if (preset === "Desktop") {
                                         setViewportWidth(1280);
@@ -4759,7 +4762,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
 
                               return (
                                 <button
-                                  key={subTab}
+                                  key={`asset-subtab-${subTab}`}
                                   onClick={() => {
                                     setActiveAssetSubTab(subTab);
                                     setActiveCarouselIndex(0);
@@ -6553,6 +6556,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
       <AnimatePresence>
         {viewerImage && (
           <motion.div
+            key="viewer-image-modal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -6792,6 +6796,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
       <AnimatePresence>
         {compareSnapshot && (
           <motion.div
+            key="compare-snapshot-modal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -6925,6 +6930,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
       <AnimatePresence>
         {showShareModal && (
           <motion.div
+            key="share-modal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -7212,6 +7218,7 @@ Project exported from **ScriptBench / Playwright Automation IDE**.
       <AnimatePresence>
         {contextMenu && (
           <motion.div
+            key="context-menu-popup"
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}

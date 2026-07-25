@@ -126,7 +126,7 @@ export default function SchedulesPanel({
               <div className="grid grid-cols-2 gap-1.5 bg-[#0d1117] p-1 border border-[#30363d] rounded-md">
                 {(["once", "repeat"] as const).map((t) => (
                   <button
-                    key={t}
+                    key={`sched-type-${t}`}
                     type="button"
                     onClick={() => setScheduleType(t)}
                     className={`py-1 text-center text-[10.5px] font-semibold rounded cursor-pointer transition-all ${

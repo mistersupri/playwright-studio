@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Search, X, BookOpen, Database, FileCode, Trash2, Copy, Folder, FolderOpen, ChevronDown, ChevronRight, Plus, Edit, Check, Play, Download } from "lucide-react";
+import { Search, X, BookOpen, Database, FileCode, Trash2, Copy, Folder, FolderOpen, ChevronDown, ChevronRight, Plus, Edit, Check, Play, Download, Upload } from "lucide-react";
 import { SavedScript, ScriptTemplate } from "../types";
 import { TEMPLATES } from "../data/templates";
 import { User } from "../firebase";
@@ -76,6 +76,128 @@ export default function ScriptsPanel({
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState<string>("");
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+
+  // Drag & Drop Import States
+  const [isDragOverFiles, setIsDragOverFiles] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Helper to extract files recursively if folders are dropped
+  const getAllFilesFromDataTransfer = async (dataTransfer: DataTransfer): Promise<{ name: string; file: File }[]> => {
+    const result: { name: string; file: File }[] = [];
+    const items = Array.from(dataTransfer.items || []);
+
+    const readEntry = async (entry: any, path = ""): Promise<void> => {
+      if (!entry) return;
+      if (entry.isFile) {
+        await new Promise<void>((resolve) => {
+          entry.file(
+            (file: File) => {
+              const fullPath = path ? `${path}/${file.name}` : file.name;
+              result.push({ name: fullPath, file });
+              resolve();
+            },
+            () => resolve()
+          );
+        });
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader();
+        const entries = await new Promise<any[]>((resolve) => {
+          dirReader.readEntries(
+            (e: any[]) => resolve(e || []),
+            () => resolve([])
+          );
+        });
+        for (const childEntry of entries) {
+          await readEntry(childEntry, path ? `${path}/${entry.name}` : entry.name);
+        }
+      }
+    };
+
+    if (items.length > 0 && items[0].webkitGetAsEntry) {
+      const entryPromises = items.map((item) => {
+        const entry = item.webkitGetAsEntry();
+        if (entry) return readEntry(entry);
+        return Promise.resolve();
+      });
+      await Promise.all(entryPromises);
+    }
+
+    if (result.length === 0 && dataTransfer.files && dataTransfer.files.length > 0) {
+      Array.from(dataTransfer.files).forEach((f) => {
+        result.push({ name: f.name, file: f });
+      });
+    }
+
+    return result;
+  };
+
+  const processImportedFiles = async (fileList: { name: string; file: File }[]) => {
+    if (!fileList || fileList.length === 0) return;
+
+    let count = 0;
+    let lastImportedName = "";
+
+    for (const item of fileList) {
+      try {
+        const content = await item.file.text();
+        const cleanName = item.name.replace(/\\/g, "/").trim();
+        if (!cleanName) continue;
+
+        setWorkspaceFiles((prev) => {
+          const existsIdx = prev.findIndex((f) => f.name.toLowerCase() === cleanName.toLowerCase());
+          if (existsIdx >= 0) {
+            const copy = [...prev];
+            copy[existsIdx] = { name: cleanName, code: content };
+            return copy;
+          }
+          return [...prev, { name: cleanName, code: content }];
+        });
+
+        lastImportedName = cleanName;
+        count++;
+        addTerminalLine(`Import: Successfully imported "${cleanName}" into project files`, "success");
+      } catch (err: any) {
+        addTerminalLine(`Import Error: Failed to read file "${item.name}" (${err.message || err})`, "error");
+      }
+    }
+
+    if (lastImportedName) {
+      handleSwitchFile(lastImportedName);
+    }
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverFiles(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    if (!isDragOverFiles) {
+      setIsDragOverFiles(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragOverFiles(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOverFiles(false);
+
+    const extractedFiles = await getAllFilesFromDataTransfer(e.dataTransfer);
+    if (extractedFiles.length > 0) {
+      await processImportedFiles(extractedFiles);
+    }
+  };
 
   // Resizable height states for the Workspace Files panel
   const [filesHeight, setFilesHeight] = useState<number>(() => {
@@ -317,36 +439,82 @@ export default function ScriptsPanel({
         </div>
       </div>
 
-      {/* Project Files Section */}
+      {/* Hidden File Input for Importing Scripts */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".js,.ts,.mjs,.cjs,.jsx,.tsx,.json,.txt,.csv,.py,.html,.css,.sql"
+        onChange={async (e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            const files = Array.from(e.target.files as FileList);
+            const fileArr = files.map((f: File) => ({ name: f.name, file: f }));
+            await processImportedFiles(fileArr);
+            e.target.value = "";
+          }
+        }}
+        className="hidden"
+      />
+
+      {/* Project Files Section with Drag & Drop */}
       <div 
         style={{ height: `${filesHeight}px` }}
-        className="p-3 pb-4 border-b border-[#30363d] bg-[#0d1117] flex flex-col relative"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`p-3 pb-3 border-b border-[#30363d] bg-[#0d1117] flex flex-col relative transition-colors ${
+          isDragOverFiles ? "bg-blue-950/40 ring-2 ring-blue-500/50" : ""
+        }`}
       >
-        <div className="px-1 text-[10px] font-bold text-[#8b949e] uppercase tracking-wider mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <FolderOpen className="h-3.5 w-3.5 text-blue-400 animate-pulse" />
-            <span>Project Files</span>
-            <span className="text-[9px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400 font-normal">
-              {workspaceFiles.length} file{workspaceFiles.length !== 1 ? 's' : ''}
+        {/* Drag & Drop Visual Overlay */}
+        {isDragOverFiles && (
+          <div className="absolute inset-0 z-50 bg-[#0d1117]/95 border-2 border-dashed border-blue-400 rounded-lg backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center transition-all animate-fade-in pointer-events-none m-1">
+            <div className="p-2.5 bg-blue-900/60 border border-blue-500/50 rounded-full text-blue-300 mb-2 animate-bounce">
+              <Upload className="h-5 w-5" />
+            </div>
+            <p className="text-xs font-bold text-white mb-0.5">Drop files to import into project</p>
+            <p className="text-[10px] text-blue-300">Supports .js, .ts, .json, .py, folders & script files</p>
+          </div>
+        )}
+
+        <div className="px-1 text-[10px] font-bold text-[#8b949e] uppercase tracking-wider mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0 truncate">
+            <FolderOpen className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+            <span className="truncate">Project Files</span>
+            <span className="text-[9px] bg-[#21262d] border border-[#30363d] px-1.5 py-0.2 rounded text-zinc-400 font-normal shrink-0">
+              {workspaceFiles.length}
             </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              onClick={() => setIsCreatingFile(true)}
+              title="Create new file (e.g. utils/helper.js)"
+              className="p-1 rounded text-zinc-400 hover:text-white hover:bg-[#21262d] transition cursor-pointer flex items-center gap-1 text-[10px] font-medium"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Add</span>
+            </button>
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              title="Import script files from your computer (Drag & Drop also supported)"
+              className="p-1 rounded text-blue-400 hover:text-blue-300 hover:bg-[#21262d] transition cursor-pointer flex items-center gap-1 text-[10px] font-medium"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Import</span>
+            </button>
+
             {onDownloadProject && (
               <button
                 onClick={onDownloadProject}
                 title="Download all project files as ZIP archive"
-                className="text-emerald-400 hover:text-emerald-300 p-0.5 rounded transition cursor-pointer flex items-center gap-0.5 hover:bg-[#21262d] border border-transparent hover:border-[#30363d] px-1.5 text-[9px] font-normal"
+                className="p-1 rounded text-emerald-400 hover:text-emerald-300 hover:bg-[#21262d] transition cursor-pointer flex items-center gap-1 text-[10px] font-medium"
               >
-                <Download className="h-3 w-3" /> ZIP
+                <Download className="h-3.5 w-3.5" />
+                <span className="hidden xl:inline">ZIP</span>
               </button>
             )}
-            <button
-              onClick={() => setIsCreatingFile(true)}
-              title="Create new file (supports folders, e.g. utils/helper.js)"
-              className="text-[#8b949e] hover:text-white p-0.5 rounded transition cursor-pointer flex items-center gap-0.5 hover:bg-[#21262d] border border-transparent hover:border-[#30363d] px-1.5 text-[9px] font-normal"
-            >
-              <Plus className="h-3 w-3" /> Add File
-            </button>
           </div>
         </div>
 
@@ -399,11 +567,23 @@ export default function ScriptsPanel({
           </div>
         )}
 
-        <div className="flex-grow overflow-y-auto space-y-0.5 pr-1 min-h-0">
-          {(() => {
-            const tree = buildFileTree(workspaceFiles);
-            return Object.values(tree).map((node: any, idx: number) => renderNode(node, 0, idx));
-          })()}
+        <div className="flex-grow overflow-y-auto space-y-0.5 pr-1 min-h-0 flex flex-col justify-between">
+          <div>
+            {(() => {
+              const tree = buildFileTree(workspaceFiles);
+              return Object.values(tree).map((node: any, idx: number) => renderNode(node, 0, idx));
+            })()}
+          </div>
+
+          {/* Quick Dropzone Hint Box */}
+          <div 
+            onClick={() => fileInputRef.current?.click()}
+            className="mt-2 py-1.5 px-2 border border-dashed border-[#30363d] hover:border-blue-500/60 rounded-md bg-[#161b22]/30 hover:bg-[#161b22] text-[10px] text-zinc-400 hover:text-blue-300 flex items-center justify-center gap-1.5 cursor-pointer transition-all group shrink-0"
+            title="Click or drop script files here to import into project"
+          >
+            <Upload className="h-3 w-3 text-zinc-500 group-hover:text-blue-400 shrink-0" />
+            <span className="truncate">Drag & drop files or <span className="underline font-medium text-blue-400">browse</span></span>
+          </div>
         </div>
 
         {/* Vertical Resize Handle */}

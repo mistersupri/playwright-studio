@@ -68,11 +68,12 @@ export default function GeminiSettingsModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
+        <div key="gemini-settings-modal-backdrop" className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
           {/* Backdrop Click */}
           <div className="absolute inset-0 cursor-default" onClick={onClose} />
 
           <motion.div
+            key="gemini-settings-modal-content"
             initial={{ opacity: 0, scale: 0.95, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 15 }}

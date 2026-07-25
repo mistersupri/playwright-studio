@@ -98,7 +98,7 @@ export default function AIPanel({
               <div className="grid grid-cols-3 gap-1 select-none">
                 {(["replace", "append", "prepend"] as const).map((m) => (
                   <button
-                    key={m}
+                    key={`ai-mode-${m}`}
                     onClick={() => setAiGenerationMode(m)}
                     disabled={generatingScript}
                     className={`p-1 py-1.5 text-center text-[10px] font-semibold border rounded-md transition-all cursor-pointer capitalize ${

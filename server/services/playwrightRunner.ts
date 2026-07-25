@@ -577,8 +577,13 @@ export async function runScript(
   // Setup temporary files workspace
   try {
     fs.mkdirSync(workspaceDir, { recursive: true });
+    // Write package.json inside workspace directory to enforce CommonJS require compatibility
+    fs.writeFileSync(
+      path.join(workspaceDir, "package.json"),
+      JSON.stringify({ name: `playwright-workspace-${runId}`, version: "1.0.0", type: "commonjs" }, null, 2)
+    );
     // Write entrypoint file main.js
-    fs.writeFileSync(path.join(workspaceDir, "main.js"), code);
+    fs.writeFileSync(path.join(workspaceDir, "main.js"), transformImportsToRequires(code));
     // Write other files
     if (files && files.length > 0) {
       files.forEach((f) => {
@@ -591,7 +596,7 @@ export async function runScript(
         if (!fs.existsSync(fileDir)) {
           fs.mkdirSync(fileDir, { recursive: true });
         }
-        fs.writeFileSync(filePath, f.code);
+        fs.writeFileSync(filePath, transformImportsToRequires(f.code));
       });
     }
   } catch (err: any) {
