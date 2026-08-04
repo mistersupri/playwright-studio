@@ -851,7 +851,7 @@ app.get("/api/scripts", async (req, res) => {
     const scripts: any[] = [];
     
     rawScripts.forEach((data) => {
-      const isPrivate = data.isPrivate === true;
+      const isPrivate = data.isPrivate !== false;
       const belongsToUser = user && data.ownerId === user.uid;
 
       if (!isPrivate || belongsToUser) {
@@ -929,7 +929,7 @@ app.get("/api/scripts/:id", async (req, res) => {
       return;
     }
 
-    const isPrivate = data.isPrivate === true;
+    const isPrivate = data.isPrivate !== false;
     const belongsToUser = user && data.ownerId === user.uid;
 
     if (isPrivate && !belongsToUser) {
@@ -1049,7 +1049,7 @@ app.post("/api/scripts", async (req, res) => {
 
     const encryptedName = encrypt(name.trim());
     const encryptedCode = encrypt(code || "");
-    const isPrivateBool = isPrivate === true;
+    const isPrivateBool = isPrivate !== false;
 
     const encryptedFiles = (files || []).map((f: any) => ({
       name: f.name,

@@ -81,6 +81,7 @@ import SchedulesPanel from "./components/SchedulesPanel";
 import BreakpointsPanel from "./components/BreakpointsPanel";
 import ExtensionPanel from "./components/ExtensionPanel";
 import AIPanel from "./components/AIPanel";
+import { SearchPanel } from "./components/SearchPanel";
 
 export default function App() {
   const [scripts, setScripts] = useState<SavedScript[]>([]);
@@ -97,7 +98,7 @@ export default function App() {
   // Auth state
   const [user, setUser] = useState<User | null>(null);
   const [idToken, setIdToken] = useState<string | null>(null);
-  const [isPrivate, setIsPrivate] = useState<boolean>(false);
+  const [isPrivate, setIsPrivate] = useState<boolean>(true);
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
@@ -235,7 +236,7 @@ export default function App() {
   const [installedDeps, setInstalledDeps] = useState<{ [key: string]: string }>({});
   const [installingPkg, setInstallingPkg] = useState<string | null>(null);
   const [newPkgName, setNewPkgName] = useState<string>("");
-  const [sidebarTab, setSidebarTab] = useState<"scripts" | "packages" | "variables" | "history" | "ai" | "schedules" | "breakpoints" | "extension">("scripts");
+  const [sidebarTab, setSidebarTab] = useState<"scripts" | "search" | "packages" | "variables" | "history" | "ai" | "schedules" | "breakpoints" | "extension">("scripts");
   const [selectedExtensionFileIndex, setSelectedExtensionFileIndex] = useState<number>(0);
   const [breakpointsMuted, setBreakpointsMuted] = useState<boolean>(() => {
     return localStorage.getItem("playwright_breakpoints_muted") === "true";
@@ -385,12 +386,18 @@ export default function App() {
     });
   };
 
-  const jumpToLine = (line: number) => {
+  const jumpToLine = (line: number, column?: number, matchLength?: number) => {
     if (editorRef.current) {
+      const col = column || 1;
       editorRef.current.revealLineInCenter(line);
-      editorRef.current.setPosition({ lineNumber: line, column: 1 });
+      editorRef.current.setPosition({ lineNumber: line, column: col });
+      if (column && matchLength && monacoRef.current) {
+        editorRef.current.setSelection(
+          new monacoRef.current.Range(line, column, line, column + matchLength)
+        );
+      }
       editorRef.current.focus();
-      addTerminalLine(`Debugger: Jumped to Line ${line} in editor`, "info");
+      addTerminalLine(`Editor: Jumped to Line ${line}${column ? `, Col ${column}` : ''}`, "info");
     }
   };
 
@@ -1006,7 +1013,11 @@ export default function App() {
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
       
-      if (isCmdOrCtrl && e.key === "Enter") {
+      if (isCmdOrCtrl && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSidebarTab("search");
+        if (isSidebarCollapsed) toggleSidebarCollapsed();
+      } else if (isCmdOrCtrl && e.key === "Enter") {
         e.preventDefault();
         if (runScriptRef.current) runScriptRef.current();
       } else if (isCmdOrCtrl && e.key.toLowerCase() === "s") {
@@ -1883,7 +1894,7 @@ export default function App() {
     setCurrentCode(template.code);
     setScriptName("");
     setActiveScriptId(null);
-    setIsPrivate(false);
+    setIsPrivate(true);
     setOriginalCode(template.code);
     setOriginalName("");
     setVersions([]); // Reset versions back to empty when loaded from template
@@ -1994,7 +2005,7 @@ export default function App() {
     setScriptName(script.name);
     setSelectedTemplateId("");
     setActiveScriptId(script.id || null);
-    setIsPrivate(false);
+    setIsPrivate(script.isPrivate !== false);
     setOriginalCode(script.code);
     setOriginalName(script.name);
     setVersions(script.versions || []); // Extract previous snapshots
@@ -2009,10 +2020,10 @@ export default function App() {
     }
   };
 
-  const handleSwitchFileAndJump = (fileName: string, line: number) => {
+  const handleSwitchFileAndJump = (fileName: string, line: number, column?: number, matchLength?: number) => {
     handleSwitchFile(fileName);
     setTimeout(() => {
-      jumpToLine(line);
+      jumpToLine(line, column, matchLength);
     }, 100);
   };
 
@@ -2153,7 +2164,7 @@ export default function App() {
           name: copyName,
           code: script.code,
           files: script.files || [{ name: "main.js", code: script.code }],
-          isPrivate: false
+          isPrivate: true
         })
       });
 
@@ -2872,12 +2883,17 @@ export default function App() {
 
                 <AnimatePresence>
                   {showProjectDropdown && (
-                    <React.Fragment key="project-dropdown-fragment">
+                    <motion.div
+                      key="project-dropdown-container"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.15 }}
+                    >
                       {/* Click outside backdrop */}
-                      <div key="project-dropdown-backdrop" className="fixed inset-0 z-40" onClick={() => setShowProjectDropdown(false)} />
+                      <div className="fixed inset-0 z-40" onClick={() => setShowProjectDropdown(false)} />
                       
                       <motion.div
-                        key="project-dropdown-content"
                         initial={{ opacity: 0, y: 10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -3048,7 +3064,7 @@ export default function App() {
 
                         </div>
                       </motion.div>
-                    </React.Fragment>
+                    </motion.div>
                   )}
                 </AnimatePresence>
               </div>
@@ -3164,6 +3180,19 @@ export default function App() {
               </button>
             )}
 
+            {/* Quick Search Button */}
+            <button
+              onClick={() => {
+                setSidebarTab("search");
+                if (isSidebarCollapsed) toggleSidebarCollapsed();
+              }}
+              className="h-7 px-2 sm:px-2.5 border border-[#30363d] rounded text-[10.5px] font-semibold flex items-center gap-1.5 bg-[#161b22] text-[#8b949e] hover:bg-[#21262d] hover:text-[#c9d1d9] transition-all cursor-pointer select-none shrink-0"
+              title="Search text across project files (Ctrl+Shift+F)"
+            >
+              <Search className="w-3.5 h-3.5 text-blue-400" />
+              <span className="hidden sm:inline">Search</span>
+            </button>
+
             {/* Elegant Execution Settings Dropdown */}
             <div className="relative shrink-0">
               <button
@@ -3189,10 +3218,15 @@ export default function App() {
 
               <AnimatePresence>
                 {showConfigDropdown && (
-                  <React.Fragment key="config-dropdown-fragment">
-                    <div key="config-dropdown-backdrop" className="fixed inset-0 z-40" onClick={() => setShowConfigDropdown(false)} />
+                  <motion.div
+                    key="config-dropdown-container"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                  >
+                    <div className="fixed inset-0 z-40" onClick={() => setShowConfigDropdown(false)} />
                     <motion.div
-                      key="config-dropdown-content"
                       initial={{ opacity: 0, y: 10, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -3382,7 +3416,7 @@ export default function App() {
                         </div>
                       </div>
                     </motion.div>
-                  </React.Fragment>
+                  </motion.div>
                 )}
               </AnimatePresence>
             </div>
@@ -3704,9 +3738,20 @@ export default function App() {
                 className={`p-2 rounded-md hover:text-white hover:bg-[#30363d]/50 transition-colors cursor-pointer relative ${
                   sidebarTab === "scripts" && !isSidebarCollapsed ? "text-blue-400 bg-[#0d1117] border border-[#30363d]" : "text-zinc-400"
                 }`}
-                title="Script Library"
+                title="Script Library & Files"
               >
                 <FileCode className="h-4.5 w-4.5" />
+              </button>
+
+              {/* Tab: Global Search */}
+              <button
+                onClick={() => { setSidebarTab("search"); if (isSidebarCollapsed) toggleSidebarCollapsed(); }}
+                className={`p-2 rounded-md hover:text-white hover:bg-[#30363d]/50 transition-colors cursor-pointer relative ${
+                  sidebarTab === "search" && !isSidebarCollapsed ? "text-blue-400 bg-[#0d1117] border border-[#30363d]" : "text-zinc-400"
+                }`}
+                title="Global Search in Project Files (Ctrl+Shift+F)"
+              >
+                <Search className="h-4.5 w-4.5" />
               </button>
 
               {/* Tab: Packages */}
@@ -3824,7 +3869,17 @@ export default function App() {
           {/* 2. Main Content Area of the active Tab (Visible only when NOT collapsed, or when on mobile) */}
           {(!isSidebarCollapsed || showMobileSidebar) && (
             <div className="flex-grow flex flex-col min-w-0 h-full overflow-hidden">
-              {sidebarTab === "scripts" ? (
+              {sidebarTab === "search" ? (
+                <SearchPanel
+                  workspaceFiles={workspaceFiles}
+                  activeFileName={activeFileName}
+                  currentCode={currentCode}
+                  handleSwitchFileAndJump={handleSwitchFileAndJump}
+                  setWorkspaceFiles={setWorkspaceFiles}
+                  setCurrentCode={setCurrentCode}
+                  addTerminalLine={addTerminalLine}
+                />
+              ) : sidebarTab === "scripts" ? (
                 <ScriptsPanel
                   scripts={scripts}
                   user={user}
@@ -6892,7 +6947,11 @@ export default function App() {
                       <span className="text-white font-semibold">{scriptName || "untitled"}</span>
                     </div>
                     <div className="flex items-center gap-1 text-[10px]">
-                      <span className="text-emerald-500 bg-emerald-950/40 border border-emerald-900/60 px-1.5 py-0.5 rounded font-bold">Shareable</span>
+                      {isPrivate ? (
+                        <span className="text-amber-400 bg-amber-950/40 border border-amber-900/60 px-1.5 py-0.5 rounded font-bold">Private</span>
+                      ) : (
+                        <span className="text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 px-1.5 py-0.5 rounded font-bold">Public & Sharable</span>
+                      )}
                     </div>
                   </div>
 
@@ -6906,12 +6965,12 @@ export default function App() {
                           ) : (
                             <Globe className="h-3 w-3 text-emerald-400" />
                           )}
-                          <span>Privacy Visibility</span>
+                          <span>Public Privacy Visibility</span>
                         </span>
                         <p className="text-[11px] text-zinc-300 font-semibold font-sans">
                           {isPrivate 
-                            ? "Private Mode (Only you can access)" 
-                            : "Public Mode (Anyone with the link can access)"
+                            ? "Private Mode (Hanya pemilik yang dapat mengakses)" 
+                            : "Public & Sharable Mode (Siapa pun dengan tautan dapat mengakses)"
                           }
                         </p>
                       </div>
@@ -6933,7 +6992,7 @@ export default function App() {
                                 body: JSON.stringify({ isPrivate: newIsPrivate })
                               });
                               if (r.ok) {
-                                addTerminalLine(`Project is now set to ${newIsPrivate ? "Private" : "Public"}.`, "success");
+                                addTerminalLine(`Project visibility is now ${newIsPrivate ? "Private" : "Public & Sharable"}.`, "success");
                                 loadSavedScripts();
                               } else {
                                 addTerminalLine("Failed to save privacy update.", "error");
@@ -6947,6 +7006,7 @@ export default function App() {
                           isPrivate ? "bg-zinc-700" : "bg-emerald-600 animate-none"
                         }`}
                         aria-pressed={!isPrivate}
+                        title={isPrivate ? "Klik toggle ON untuk menjadikan Public & Sharable" : "Klik toggle OFF untuk menjadikan Private"}
                       >
                         <span
                           className={`pointer-events-none inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
@@ -6957,8 +7017,8 @@ export default function App() {
                     </div>
                     <p className="text-[10px] text-zinc-500 leading-normal border-t border-[#30363d]/50 pt-2 font-sans select-none">
                       {isPrivate 
-                        ? "Warning: In Private Mode, the public link below will return a 403 error for unauthenticated visitors."
-                        : "Recommended: Anyone on the web with this link will be able to view, copy-draft, or run this project."
+                        ? "Project saat ini bersifat Private. Aktifkan (toggle ON) untuk mengubah status menjadi Public & Sharable."
+                        : "Toggle ON aktif: Siapa pun yang memiliki tautan dapat melihat & menjalankan project ini."
                       }
                     </p>
                   </div>
@@ -7182,7 +7242,7 @@ export default function App() {
                     ownerEmail: user?.email || "",
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString(),
-                    isPrivate: false,
+                    isPrivate: true,
                     versions: []
                   };
                   handleMakeCopy(dummyScript);
@@ -8363,7 +8423,7 @@ export default function App() {
                   </div>
                   <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
                     {(workspaceFiles && workspaceFiles.length > 0 ? workspaceFiles : [{ name: "main.js" }]).map((f, i) => (
-                      <div key={i} className="bg-[#0d1117] px-2.5 py-1.5 border border-[#30363d]/60 rounded flex items-center justify-between">
+                      <div key={`download-file-${f.name || 'file'}-${i}`} className="bg-[#0d1117] px-2.5 py-1.5 border border-[#30363d]/60 rounded flex items-center justify-between">
                         <div className="flex items-center gap-2 truncate">
                           <FileCode className="h-3.5 w-3.5 text-blue-400 shrink-0" />
                           <span className="font-mono text-white text-xs truncate">{f.name}</span>
