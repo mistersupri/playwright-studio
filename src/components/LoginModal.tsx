@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { Lock, X, Zap } from "lucide-react";
 
 interface LoginModalProps {
+  key?: React.Key;
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (e: React.FormEvent) => void;

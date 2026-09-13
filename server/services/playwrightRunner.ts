@@ -226,9 +226,10 @@ function encryptFileInPlace(filePath: string) {
 /**
  * Scan workspace root for newly created screenshots, PDFs, Excel sheets, or Videos and move them to targeted directories.
  */
-function scanAndMoveArtifacts(startTime: number): { type: "screenshot" | "pdf" | "excel" | "video"; name: string; url: string; size?: number; timestamp?: string }[] {
+function scanAndMoveArtifacts(startTime: number, scriptId?: string): { type: "screenshot" | "pdf" | "excel" | "video"; name: string; displayName?: string; scriptId?: string; url: string; size?: number; timestamp?: string }[] {
   const rootFiles = fs.readdirSync(process.cwd());
-  const found: { type: "screenshot" | "pdf" | "excel" | "video"; name: string; url: string; size?: number; timestamp?: string }[] = [];
+  const found: { type: "screenshot" | "pdf" | "excel" | "video"; name: string; displayName?: string; scriptId?: string; url: string; size?: number; timestamp?: string }[] = [];
+  const safeScriptId = scriptId || "default";
 
   for (const file of rootFiles) {
     const filePath = path.join(process.cwd(), file);
@@ -237,52 +238,62 @@ function scanAndMoveArtifacts(startTime: number): { type: "screenshot" | "pdf" |
       // Check if file is newly created or modified since script started and is a file (not directory)
       if (stats.isFile() && stats.mtimeMs >= startTime) {
         const ext = path.extname(file).toLowerCase();
+        const finalFileName = file.startsWith(`${safeScriptId}__`) ? file : `${safeScriptId}__${file}`;
+        const cleanDisplayName = file.startsWith(`${safeScriptId}__`) ? file.substring(safeScriptId.length + 2) : file;
         
         if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
-          const destPath = path.join(SCREENSHOTS_DIR, file);
+          const destPath = path.join(SCREENSHOTS_DIR, finalFileName);
           fs.renameSync(filePath, destPath);
           encryptFileInPlace(destPath);
           const finalStats = fs.statSync(destPath);
           found.push({
             type: "screenshot",
-            name: file,
-            url: `/screenshots/${encodeURIComponent(file)}`,
+            name: finalFileName,
+            displayName: cleanDisplayName,
+            scriptId: safeScriptId,
+            url: `/screenshots/${encodeURIComponent(finalFileName)}`,
             size: finalStats.size,
             timestamp: finalStats.mtime.toISOString()
           });
         } else if (ext === ".pdf") {
-          const destPath = path.join(PDF_DIR, file);
+          const destPath = path.join(PDF_DIR, finalFileName);
           fs.renameSync(filePath, destPath);
           encryptFileInPlace(destPath);
           const finalStats = fs.statSync(destPath);
           found.push({
             type: "pdf",
-            name: file,
-            url: `/pdf/${encodeURIComponent(file)}`,
+            name: finalFileName,
+            displayName: cleanDisplayName,
+            scriptId: safeScriptId,
+            url: `/pdf/${encodeURIComponent(finalFileName)}`,
             size: finalStats.size,
             timestamp: finalStats.mtime.toISOString()
           });
         } else if (ext === ".xlsx" || ext === ".xls" || ext === ".csv") {
-          const destPath = path.join(EXCEL_DIR, file);
+          const destPath = path.join(EXCEL_DIR, finalFileName);
           fs.renameSync(filePath, destPath);
           encryptFileInPlace(destPath);
           const finalStats = fs.statSync(destPath);
           found.push({
             type: "excel",
-            name: file,
-            url: `/excel/${encodeURIComponent(file)}`,
+            name: finalFileName,
+            displayName: cleanDisplayName,
+            scriptId: safeScriptId,
+            url: `/excel/${encodeURIComponent(finalFileName)}`,
             size: finalStats.size,
             timestamp: finalStats.mtime.toISOString()
           });
         } else if (ext === ".webm" || ext === ".mp4") {
-          const destPath = path.join(VIDEOS_DIR, file);
+          const destPath = path.join(VIDEOS_DIR, finalFileName);
           fs.renameSync(filePath, destPath);
           encryptFileInPlace(destPath);
           const finalStats = fs.statSync(destPath);
           found.push({
             type: "video",
-            name: file,
-            url: `/videos/${encodeURIComponent(file)}`,
+            name: finalFileName,
+            displayName: cleanDisplayName,
+            scriptId: safeScriptId,
+            url: `/videos/${encodeURIComponent(finalFileName)}`,
             size: finalStats.size,
             timestamp: finalStats.mtime.toISOString()
           });
@@ -300,15 +311,35 @@ function scanAndMoveArtifacts(startTime: number): { type: "screenshot" | "pdf" |
       const filePath = path.join(SCREENSHOTS_DIR, file);
       const stats = fs.statSync(filePath);
       if (stats.isFile() && stats.mtimeMs >= startTime) {
-        encryptFileInPlace(filePath);
-        const finalStats = fs.statSync(filePath);
-        found.push({
-          type: "screenshot",
-          name: file,
-          url: `/screenshots/${encodeURIComponent(file)}`,
-          size: finalStats.size,
-          timestamp: finalStats.mtime.toISOString()
-        });
+        let finalFileName = file;
+        let cleanDisplayName = file;
+        let fileScriptId = safeScriptId;
+        if (file.includes("__")) {
+          const idx = file.indexOf("__");
+          fileScriptId = file.substring(0, idx);
+          cleanDisplayName = file.substring(idx + 2);
+        } else if (scriptId) {
+          finalFileName = `${scriptId}__${file}`;
+          const newPath = path.join(SCREENSHOTS_DIR, finalFileName);
+          try { fs.renameSync(filePath, newPath); } catch (e) {}
+          cleanDisplayName = file;
+          fileScriptId = scriptId;
+        }
+
+        const targetPath = path.join(SCREENSHOTS_DIR, finalFileName);
+        if (fs.existsSync(targetPath)) {
+          encryptFileInPlace(targetPath);
+          const finalStats = fs.statSync(targetPath);
+          found.push({
+            type: "screenshot",
+            name: finalFileName,
+            displayName: cleanDisplayName,
+            scriptId: fileScriptId,
+            url: `/screenshots/${encodeURIComponent(finalFileName)}`,
+            size: finalStats.size,
+            timestamp: finalStats.mtime.toISOString()
+          });
+        }
       }
     }
   } catch (err) {
@@ -321,15 +352,35 @@ function scanAndMoveArtifacts(startTime: number): { type: "screenshot" | "pdf" |
       const filePath = path.join(PDF_DIR, file);
       const stats = fs.statSync(filePath);
       if (stats.isFile() && stats.mtimeMs >= startTime) {
-        encryptFileInPlace(filePath);
-        const finalStats = fs.statSync(filePath);
-        found.push({
-          type: "pdf",
-          name: file,
-          url: `/pdf/${encodeURIComponent(file)}`,
-          size: finalStats.size,
-          timestamp: finalStats.mtime.toISOString()
-        });
+        let finalFileName = file;
+        let cleanDisplayName = file;
+        let fileScriptId = safeScriptId;
+        if (file.includes("__")) {
+          const idx = file.indexOf("__");
+          fileScriptId = file.substring(0, idx);
+          cleanDisplayName = file.substring(idx + 2);
+        } else if (scriptId) {
+          finalFileName = `${scriptId}__${file}`;
+          const newPath = path.join(PDF_DIR, finalFileName);
+          try { fs.renameSync(filePath, newPath); } catch (e) {}
+          cleanDisplayName = file;
+          fileScriptId = scriptId;
+        }
+
+        const targetPath = path.join(PDF_DIR, finalFileName);
+        if (fs.existsSync(targetPath)) {
+          encryptFileInPlace(targetPath);
+          const finalStats = fs.statSync(targetPath);
+          found.push({
+            type: "pdf",
+            name: finalFileName,
+            displayName: cleanDisplayName,
+            scriptId: fileScriptId,
+            url: `/pdf/${encodeURIComponent(finalFileName)}`,
+            size: finalStats.size,
+            timestamp: finalStats.mtime.toISOString()
+          });
+        }
       }
     }
   } catch (err) {
@@ -343,15 +394,35 @@ function scanAndMoveArtifacts(startTime: number): { type: "screenshot" | "pdf" |
         const filePath = path.join(EXCEL_DIR, file);
         const stats = fs.statSync(filePath);
         if (stats.isFile() && stats.mtimeMs >= startTime) {
-          encryptFileInPlace(filePath);
-          const finalStats = fs.statSync(filePath);
-          found.push({
-            type: "excel",
-            name: file,
-            url: `/excel/${encodeURIComponent(file)}`,
-            size: finalStats.size,
-            timestamp: finalStats.mtime.toISOString()
-          });
+          let finalFileName = file;
+          let cleanDisplayName = file;
+          let fileScriptId = safeScriptId;
+          if (file.includes("__")) {
+            const idx = file.indexOf("__");
+            fileScriptId = file.substring(0, idx);
+            cleanDisplayName = file.substring(idx + 2);
+          } else if (scriptId) {
+            finalFileName = `${scriptId}__${file}`;
+            const newPath = path.join(EXCEL_DIR, finalFileName);
+            try { fs.renameSync(filePath, newPath); } catch (e) {}
+            cleanDisplayName = file;
+            fileScriptId = scriptId;
+          }
+
+          const targetPath = path.join(EXCEL_DIR, finalFileName);
+          if (fs.existsSync(targetPath)) {
+            encryptFileInPlace(targetPath);
+            const finalStats = fs.statSync(targetPath);
+            found.push({
+              type: "excel",
+              name: finalFileName,
+              displayName: cleanDisplayName,
+              scriptId: fileScriptId,
+              url: `/excel/${encodeURIComponent(finalFileName)}`,
+              size: finalStats.size,
+              timestamp: finalStats.mtime.toISOString()
+            });
+          }
         }
       }
     }
@@ -366,15 +437,35 @@ function scanAndMoveArtifacts(startTime: number): { type: "screenshot" | "pdf" |
         const filePath = path.join(VIDEOS_DIR, file);
         const stats = fs.statSync(filePath);
         if (stats.isFile() && stats.mtimeMs >= startTime) {
-          encryptFileInPlace(filePath);
-          const finalStats = fs.statSync(filePath);
-          found.push({
-            type: "video",
-            name: file,
-            url: `/videos/${encodeURIComponent(file)}`,
-            size: finalStats.size,
-            timestamp: finalStats.mtime.toISOString()
-          });
+          let finalFileName = file;
+          let cleanDisplayName = file;
+          let fileScriptId = safeScriptId;
+          if (file.includes("__")) {
+            const idx = file.indexOf("__");
+            fileScriptId = file.substring(0, idx);
+            cleanDisplayName = file.substring(idx + 2);
+          } else if (scriptId) {
+            finalFileName = `${scriptId}__${file}`;
+            const newPath = path.join(VIDEOS_DIR, finalFileName);
+            try { fs.renameSync(filePath, newPath); } catch (e) {}
+            cleanDisplayName = file;
+            fileScriptId = scriptId;
+          }
+
+          const targetPath = path.join(VIDEOS_DIR, finalFileName);
+          if (fs.existsSync(targetPath)) {
+            encryptFileInPlace(targetPath);
+            const finalStats = fs.statSync(targetPath);
+            found.push({
+              type: "video",
+              name: finalFileName,
+              displayName: cleanDisplayName,
+              scriptId: fileScriptId,
+              url: `/videos/${encodeURIComponent(finalFileName)}`,
+              size: finalStats.size,
+              timestamp: finalStats.mtime.toISOString()
+            });
+          }
         }
       }
     }
@@ -538,7 +629,8 @@ export async function runScript(
   useGeminiCaptcha?: boolean,
   onChoicePrompt?: (event: { options: any[] }) => void,
   files?: { name: string; code: string }[],
-  onCookies?: (cookies: any[]) => void
+  onCookies?: (cookies: any[]) => void,
+  scriptId?: string
 ): Promise<any> {
   let instrumentedCode = transformImportsToRequires(code);
   if (isDebuggerMode && breakpoints && breakpoints.length > 0) {
@@ -705,7 +797,7 @@ export async function runScript(
 
     // Scan one last time for newly produced files before closing
     try {
-      const finalArtifacts = scanAndMoveArtifacts(startTime);
+      const finalArtifacts = scanAndMoveArtifacts(startTime, scriptId);
       for (const item of finalArtifacts) {
         // Prevent repeating
         if (!runner.artifacts.some(a => a.url === item.url)) {
@@ -1058,7 +1150,7 @@ export async function runScript(
         onPreview(`data:image/jpeg;base64,${base64}`);
         
         // Scan for updated files concurrently while running code
-        const newlyFound = scanAndMoveArtifacts(startTime);
+        const newlyFound = scanAndMoveArtifacts(startTime, scriptId);
         for (const item of newlyFound) {
           if (!runner.artifacts.some(a => a.url === item.url)) {
             runner.artifacts.push(item);

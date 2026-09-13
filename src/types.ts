@@ -40,6 +40,8 @@ export interface RunHistoryItem {
 export interface Artifact {
   type: "screenshot" | "pdf" | "excel" | "upload" | "video";
   name: string;
+  displayName?: string;
+  scriptId?: string;
   url: string;
   timestamp?: string;
   size?: number;

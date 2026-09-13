@@ -137,6 +137,7 @@ export default function App() {
   const [scriptToDelete, setScriptToDelete] = useState<SavedScript | null>(null);
   const [envToRevoke, setEnvToRevoke] = useState<{ id: string; key: string } | null>(null);
   const [workspaceToDelete, setWorkspaceToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [workspaceFileToDelete, setWorkspaceFileToDelete] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
   const [clearType, setClearType] = useState<string>("all");
   const [fileToDelete, setFileToDelete] = useState<string | null>(null);
@@ -1459,7 +1460,8 @@ export default function App() {
 
   const loadArtifacts = async () => {
     try {
-      const res = await fetch("/api/artifacts");
+      const url = activeScriptId ? `/api/artifacts?scriptId=${encodeURIComponent(activeScriptId)}` : "/api/artifacts";
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
         setArtifacts(data);
@@ -1526,7 +1528,8 @@ export default function App() {
             headers,
             body: JSON.stringify({
               name: file.name,
-              content: base64Content
+              content: base64Content,
+              scriptId: activeScriptId || undefined
             })
           });
           if (res.ok) {
@@ -2071,6 +2074,11 @@ export default function App() {
       alert("The entry point 'main.js' cannot be deleted.");
       return;
     }
+    setWorkspaceFileToDelete(trimmed);
+  };
+
+  const executeDeleteFile = (fileName: string) => {
+    const trimmed = fileName.trim();
     setWorkspaceFiles(prev => prev.filter(f => f.name !== trimmed));
     if (activeFileName === trimmed) {
       const fallback = workspaceFiles.find(f => f.name === "main.js") || workspaceFiles[0];
@@ -2079,7 +2087,7 @@ export default function App() {
         setCurrentCode(fallback.code);
       }
     }
-    addTerminalLine(`Deleted file: "${trimmed}"`, "warning");
+    addTerminalLine(`Deleted script file: "${trimmed}"`, "warning");
   };
 
   const handleSaveScript = async (
@@ -2718,24 +2726,25 @@ export default function App() {
       const res = await fetch("/api/artifacts/clear", {
         method: "POST",
         headers,
-        body: JSON.stringify({ type: clearType }),
+        body: JSON.stringify({
+          type: clearType,
+          scriptId: activeScriptId || undefined
+        }),
       });
       if (res.ok) {
-        if (clearType === "all") {
-          setArtifacts([]);
+        if (clearType === "outputs" || clearType === "screenshot") {
           setPreviewImage(null);
-          addTerminalLine("Disk Cleanup: All workspace assets purged successfully.", "info");
-        } else {
-          setArtifacts(prev => prev.filter(art => art.type !== clearType));
-          if (clearType === "screenshot") {
-            setPreviewImage(null);
-          }
-          const label = clearType === "screenshot" ? "Screenshots"
-            : clearType === "pdf" ? "PDFs"
-            : clearType === "excel" ? "Excel sheets"
-            : "Uploads";
-          addTerminalLine(`Disk Cleanup: ${label} cleared successfully.`, "info");
         }
+        await loadArtifacts();
+        
+        const label = clearType === "outputs" ? "Output Files (Screenshots, PDFs, Excel, Videos)"
+          : clearType === "inputs" || clearType === "upload" ? "Input Files (Uploads)"
+          : clearType === "screenshot" ? "Screenshots"
+          : clearType === "pdf" ? "PDFs"
+          : clearType === "excel" ? "Excel sheets"
+          : clearType === "video" ? "Recordings"
+          : "All Workspace Assets";
+        addTerminalLine(`Disk Cleanup: ${label} cleared successfully for current workspace.`, "info");
       } else {
         addTerminalLine(`Failed to clear assets: server returned ${res.status}`, "error");
       }
@@ -4613,8 +4622,17 @@ export default function App() {
                       }
                     });
 
-                    // Filter artifacts strictly based on the selected folder
-                    const filteredArtifacts = artifacts.filter(art => {
+                    // Filter artifacts strictly based on current workspace and selected folder
+                    const workspaceArtifacts = artifacts.filter(art => {
+                      if (activeScriptId) {
+                        if (art.scriptId) {
+                          return art.scriptId === activeScriptId;
+                        }
+                      }
+                      return true;
+                    });
+
+                    const filteredArtifacts = workspaceArtifacts.filter(art => {
                       if (activeFolder === "All") return true;
                       return getArtifactFolder(art) === activeFolder;
                     });
@@ -4771,16 +4789,39 @@ export default function App() {
                                   <span>Save All {tabLabel} ({subCount})</span>
                                 </button>
 
-                                {/* Delete All button */}
-                                <button
-                                  onClick={() => handleClearArtifacts(activeAssetSubTab)}
-                                  disabled={clearing}
-                                  className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900 border border-rose-900/45 text-rose-350 hover:text-white disabled:bg-[#161b22] disabled:opacity-50 font-semibold text-xs transition-all cursor-pointer whitespace-nowrap"
-                                  title={`Delete all assets in ${tabLabel}`}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                  <span>Delete All {tabLabel}</span>
-                                </button>
+                                {/* Delete buttons - separated for Output files vs Input files */}
+                                {activeAssetSubTab === "all" ? (
+                                  <>
+                                    <button
+                                      onClick={() => handleClearArtifacts("outputs")}
+                                      disabled={clearing}
+                                      className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900 border border-rose-900/45 text-rose-350 hover:text-white disabled:bg-[#161b22] disabled:opacity-50 font-semibold text-xs transition-all cursor-pointer whitespace-nowrap"
+                                      title="Delete all generated output files (screenshots, PDFs, Excel sheets, recordings)"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      <span>Delete Output Files</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleClearArtifacts("inputs")}
+                                      disabled={clearing}
+                                      className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900 border border-amber-900/45 text-amber-300 hover:text-white disabled:bg-[#161b22] disabled:opacity-50 font-semibold text-xs transition-all cursor-pointer whitespace-nowrap"
+                                      title="Delete all uploaded input files"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      <span>Delete Input Files</span>
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() => handleClearArtifacts(activeAssetSubTab === "upload" ? "inputs" : activeAssetSubTab)}
+                                    disabled={clearing}
+                                    className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900 border border-rose-900/45 text-rose-350 hover:text-white disabled:bg-[#161b22] disabled:opacity-50 font-semibold text-xs transition-all cursor-pointer whitespace-nowrap"
+                                    title={`Delete all assets in ${tabLabel}`}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    <span>Delete {activeAssetSubTab === "upload" ? "Input Files" : `All ${tabLabel}`}</span>
+                                  </button>
+                                )}
                               </div>
                             );
                           })()}
@@ -5594,11 +5635,11 @@ export default function App() {
                                     <div className="flex items-center gap-2.5 min-w-0 w-full sm:w-auto">
                                       <Upload className="h-4 w-4 text-blue-400 shrink-0" />
                                       <div className="min-w-0 text-left">
-                                        <span className="text-[11px] font-mono font-medium text-zinc-200 block truncate" title={art.name}>
-                                          {art.name}
+                                        <span className="text-[11px] font-mono font-medium text-zinc-200 block truncate" title={art.displayName || art.name}>
+                                          {art.displayName || art.name}
                                         </span>
                                         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[8px] font-mono text-zinc-500 mt-0.5">
-                                          <span>uploads/{art.name}</span>
+                                          <span>uploads/{art.displayName || art.name}</span>
                                           <span>•</span>
                                           <span>{formatFileSize(art.size)}</span>
                                           {art.timestamp && (
@@ -5613,8 +5654,8 @@ export default function App() {
                                     <div className="flex items-center justify-between sm:justify-end gap-1.5 w-full sm:w-auto shrink-0">
                                       <button
                                         onClick={() => {
-                                          navigator.clipboard.writeText(`uploads/${art.name}`);
-                                          addTerminalLine(`Copied relative path for "${art.name}"`, "success");
+                                          navigator.clipboard.writeText(`uploads/${art.displayName || art.name}`);
+                                          addTerminalLine(`Copied relative path for "${art.displayName || art.name}"`, "success");
                                         }}
                                         className="flex-grow sm:flex-grow-0 flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded bg-[#21262d] text-zinc-300 hover:text-white border border-[#30363d] transition-colors cursor-pointer"
                                         title="Copy script path"
@@ -7293,7 +7334,7 @@ export default function App() {
 
         {/* Custom Confirmation Modals / Safe from iframe restrictions */}
         {fileToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-file-delete-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7333,7 +7374,7 @@ export default function App() {
         )}
 
         {scriptToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-script-delete-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7372,7 +7413,7 @@ export default function App() {
         )}
 
         {workspaceToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-workspace-delete-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7411,7 +7452,7 @@ export default function App() {
         )}
 
         {envToRevoke && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-env-revoke-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7451,7 +7492,7 @@ export default function App() {
         )}
 
         {showNewFolderModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-new-folder-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7510,7 +7551,7 @@ export default function App() {
         )}
 
         {comparisonModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
+          <div key="modal-comparison-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7703,7 +7744,7 @@ export default function App() {
         )}
 
         {showConsoleClearConfirm && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-console-clear-confirm-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7764,7 +7805,7 @@ export default function App() {
         )}
 
         {showValidationModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
+          <div key="modal-validation-warning-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 overflow-y-auto">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7832,6 +7873,7 @@ export default function App() {
         )}
 
         <LoginModal
+          key="modal-login-dialog"
           isOpen={showLoginModal}
           onClose={() => setShowLoginModal(false)}
           onSubmit={handleManualSignIn}
@@ -7844,6 +7886,7 @@ export default function App() {
         />
 
         <GeminiSettingsModal
+          key="modal-gemini-settings-dialog"
           isOpen={showGeminiModal}
           onClose={() => setShowGeminiModal(false)}
           apiKey={geminiApiKey}
@@ -7858,7 +7901,7 @@ export default function App() {
         />
 
         {showClearConfirm && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-clear-confirm-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7870,12 +7913,22 @@ export default function App() {
               </div>
               <div className="space-y-1.5">
                 <h3 className="text-sm font-bold text-white">
-                  {clearType === "all" ? "Clear All Assets?" : `Clear All ${clearType === "screenshot" ? "Screenshots" : clearType === "pdf" ? "PDFs" : clearType === "excel" ? "Excel sheets" : "Uploads"}?`}
+                  {clearType === "outputs" 
+                    ? "Delete All Output Files?"
+                    : clearType === "inputs" || clearType === "upload" 
+                    ? "Delete All Input Files?"
+                    : clearType === "all" 
+                    ? "Clear All Workspace Assets?"
+                    : `Clear All ${clearType === "screenshot" ? "Screenshots" : clearType === "pdf" ? "PDFs" : clearType === "excel" ? "Excel sheets" : clearType === "video" ? "Recordings" : "Uploads"}?`}
                 </h3>
                 <p className="text-[11px] text-[#8b949e]">
-                  {clearType === "all" 
-                    ? "Are you sure you want to delete all generated screenshots, PDFs, Excel sheets, and uploaded files?" 
-                    : `Are you sure you want to delete all assets within this folder category (${clearType === "screenshot" ? "screenshots" : clearType === "pdf" ? "pdf" : clearType === "excel" ? "excel" : "uploads"})?`}
+                  {clearType === "outputs"
+                    ? "Are you sure you want to delete all generated output files (screenshots, PDFs, Excel sheets, recordings) for this workspace?"
+                    : clearType === "inputs" || clearType === "upload"
+                    ? "Are you sure you want to delete all uploaded input files for this workspace?"
+                    : clearType === "all"
+                    ? "Are you sure you want to delete all generated output files and uploaded input files for this workspace?"
+                    : `Are you sure you want to delete all ${clearType === "screenshot" ? "screenshots" : clearType === "pdf" ? "PDF files" : clearType === "excel" ? "Excel files" : clearType === "video" ? "recordings" : "uploaded files"} for this workspace?`}
                 </p>
               </div>
               <div className="flex items-center gap-2 pt-2">
@@ -7899,8 +7952,47 @@ export default function App() {
           </div>
         )}
 
+        {workspaceFileToDelete && (
+          <div key="modal-workspace-file-delete-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 select-none">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl max-w-sm w-full p-6 text-center space-y-4 font-sans"
+            >
+              <div className="mx-auto w-12 h-12 rounded-full bg-rose-950/40 border border-rose-900/60 flex items-center justify-center text-rose-500">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-sm font-bold text-white">Delete Script File?</h3>
+                <p className="text-[11px] text-[#8b949e]">
+                  Are you sure you want to delete <span className="text-[#c9d1d9] font-semibold">"{workspaceFileToDelete}"</span> from this workspace?
+                </p>
+              </div>
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  onClick={() => setWorkspaceFileToDelete(null)}
+                  className="flex-1 px-4 py-2 text-xs rounded bg-[#21262d] text-zinc-300 border border-[#30363d] hover:bg-[#30363d] hover:text-white transition-all font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const target = workspaceFileToDelete;
+                    setWorkspaceFileToDelete(null);
+                    executeDeleteFile(target);
+                  }}
+                  className="flex-1 px-4 py-2 text-xs rounded bg-red-650 hover:bg-red-550 text-white transition-all font-semibold cursor-pointer shadow-sm shadow-red-900/10"
+                >
+                  Delete File
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {workspaceModalMode && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-workspace-mode-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -7983,7 +8075,7 @@ export default function App() {
         )}
 
         {sharedEnvToImport && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div key="modal-shared-env-overlay" className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -8155,7 +8247,7 @@ export default function App() {
         )}
 
         {showCreateProjectModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div key="modal-create-project-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -8247,7 +8339,7 @@ export default function App() {
         )}
 
         {pendingChoice && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div key="modal-pending-choice-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -8384,7 +8476,7 @@ export default function App() {
 
         {/* Download Project Modal Dialog */}
         {showDownloadModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div key="modal-download-project-overlay" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}

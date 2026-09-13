@@ -282,7 +282,7 @@ app.get("/api/excel/parse/:filename", async (req, res) => {
   }
 });
 
-// Create a simple endpoint to delete active screenshots/pdfs/excel to clear disk space
+// Create a simple endpoint to delete active screenshots/pdfs/excel/uploads to clear disk space
 app.post("/api/artifacts/clear", async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -292,40 +292,47 @@ app.post("/api/artifacts/clear", async (req, res) => {
       return;
     }
 
-    const { type } = req.body || {};
+    const { type, scriptId } = req.body || {};
 
-    if (!type || type === "all" || type === "screenshot") {
-      const sFiles = fs.readdirSync(SCREENSHOTS_DIR);
-      for (const f of sFiles) {
+    const clearDir = (dirPath: string) => {
+      if (!fs.existsSync(dirPath)) return;
+      const files = fs.readdirSync(dirPath);
+      for (const f of files) {
         if (f !== ".gitignore") {
-          fs.unlinkSync(path.join(SCREENSHOTS_DIR, f));
+          if (scriptId) {
+            if (f.startsWith(`${scriptId}__`)) {
+              fs.unlinkSync(path.join(dirPath, f));
+            }
+          } else {
+            fs.unlinkSync(path.join(dirPath, f));
+          }
         }
       }
+    };
+
+    if (!type || type === "all") {
+      clearDir(SCREENSHOTS_DIR);
+      clearDir(PDF_DIR);
+      clearDir(EXCEL_DIR);
+      clearDir(VIDEOS_DIR);
+      clearDir(UPLOADS_DIR);
+    } else if (type === "outputs" || type === "output_all") {
+      clearDir(SCREENSHOTS_DIR);
+      clearDir(PDF_DIR);
+      clearDir(EXCEL_DIR);
+      clearDir(VIDEOS_DIR);
+    } else if (type === "inputs" || type === "input_all" || type === "upload") {
+      clearDir(UPLOADS_DIR);
+    } else if (type === "screenshot") {
+      clearDir(SCREENSHOTS_DIR);
+    } else if (type === "pdf") {
+      clearDir(PDF_DIR);
+    } else if (type === "excel") {
+      clearDir(EXCEL_DIR);
+    } else if (type === "video") {
+      clearDir(VIDEOS_DIR);
     }
-    if (!type || type === "all" || type === "pdf") {
-      const pFiles = fs.readdirSync(PDF_DIR);
-      for (const f of pFiles) {
-        if (f !== ".gitignore") {
-          fs.unlinkSync(path.join(PDF_DIR, f));
-        }
-      }
-    }
-    if (!type || type === "all" || type === "excel") {
-      const eFiles = fs.readdirSync(EXCEL_DIR);
-      for (const f of eFiles) {
-        if (f !== ".gitignore") {
-          fs.unlinkSync(path.join(EXCEL_DIR, f));
-        }
-      }
-    }
-    if (!type || type === "all" || type === "upload") {
-      const uFiles = fs.readdirSync(UPLOADS_DIR);
-      for (const f of uFiles) {
-        if (f !== ".gitignore") {
-          fs.unlinkSync(path.join(UPLOADS_DIR, f));
-        }
-      }
-    }
+
     res.json({ success: true, message: `Artifacts cleared for type: ${type || 'all'}` });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -335,107 +342,50 @@ app.post("/api/artifacts/clear", async (req, res) => {
 // GET /api/artifacts - List all artifacts from screenshots, pdf, excel, videos, and uploads
 app.get("/api/artifacts", async (req, res) => {
   try {
-    const list: { type: "screenshot" | "pdf" | "excel" | "upload" | "video"; name: string; url: string; size?: number; timestamp?: string }[] = [];
+    const requestedScriptId = req.query.scriptId as string | undefined;
+    const list: { type: "screenshot" | "pdf" | "excel" | "upload" | "video"; name: string; displayName: string; scriptId?: string; url: string; size?: number; timestamp?: string }[] = [];
 
-    if (fs.existsSync(SCREENSHOTS_DIR)) {
-      const files = fs.readdirSync(SCREENSHOTS_DIR).filter(f => f !== ".gitignore");
+    const processDir = (dirPath: string, typeName: "screenshot" | "pdf" | "excel" | "video" | "upload", routePrefix: string) => {
+      if (!fs.existsSync(dirPath)) return;
+      const files = fs.readdirSync(dirPath).filter(f => f !== ".gitignore");
       files.forEach(f => {
         let size = 0;
         let mtime = new Date().toISOString();
         try {
-          const stats = fs.statSync(path.join(SCREENSHOTS_DIR, f));
+          const stats = fs.statSync(path.join(dirPath, f));
           size = stats.size;
           mtime = stats.mtime.toISOString();
         } catch (err) {}
-        list.push({
-          type: "screenshot",
-          name: f,
-          url: `/screenshots/${encodeURIComponent(f)}`,
-          size,
-          timestamp: mtime
-        });
-      });
-    }
 
-    if (fs.existsSync(PDF_DIR)) {
-      const files = fs.readdirSync(PDF_DIR).filter(f => f !== ".gitignore");
-      files.forEach(f => {
-        let size = 0;
-        let mtime = new Date().toISOString();
-        try {
-          const stats = fs.statSync(path.join(PDF_DIR, f));
-          size = stats.size;
-          mtime = stats.mtime.toISOString();
-        } catch (err) {}
-        list.push({
-          type: "pdf",
-          name: f,
-          url: `/pdf/${encodeURIComponent(f)}`,
-          size,
-          timestamp: mtime
-        });
-      });
-    }
+        let fileScriptId: string | undefined = undefined;
+        let displayName = f;
+        if (f.includes("__")) {
+          const idx = f.indexOf("__");
+          fileScriptId = f.substring(0, idx);
+          displayName = f.substring(idx + 2);
+        }
 
-    if (fs.existsSync(EXCEL_DIR)) {
-      const files = fs.readdirSync(EXCEL_DIR).filter(f => f !== ".gitignore");
-      files.forEach(f => {
-        let size = 0;
-        let mtime = new Date().toISOString();
-        try {
-          const stats = fs.statSync(path.join(EXCEL_DIR, f));
-          size = stats.size;
-          mtime = stats.mtime.toISOString();
-        } catch (err) {}
-        list.push({
-          type: "excel",
-          name: f,
-          url: `/excel/${encodeURIComponent(f)}`,
-          size,
-          timestamp: mtime
-        });
-      });
-    }
+        if (requestedScriptId && fileScriptId && fileScriptId !== requestedScriptId) {
+          return;
+        }
 
-    if (fs.existsSync(VIDEOS_DIR)) {
-      const files = fs.readdirSync(VIDEOS_DIR).filter(f => f !== ".gitignore");
-      files.forEach(f => {
-        let size = 0;
-        let mtime = new Date().toISOString();
-        try {
-          const stats = fs.statSync(path.join(VIDEOS_DIR, f));
-          size = stats.size;
-          mtime = stats.mtime.toISOString();
-        } catch (err) {}
         list.push({
-          type: "video",
+          type: typeName,
           name: f,
-          url: `/videos/${encodeURIComponent(f)}`,
+          displayName,
+          scriptId: fileScriptId,
+          url: `/${routePrefix}/${encodeURIComponent(f)}`,
           size,
           timestamp: mtime
         });
       });
-    }
+    };
 
-    if (fs.existsSync(UPLOADS_DIR)) {
-      const files = fs.readdirSync(UPLOADS_DIR).filter(f => f !== ".gitignore");
-      files.forEach(f => {
-        let size = 0;
-        let mtime = new Date().toISOString();
-        try {
-          const stats = fs.statSync(path.join(UPLOADS_DIR, f));
-          size = stats.size;
-          mtime = stats.mtime.toISOString();
-        } catch (err) {}
-        list.push({
-          type: "upload",
-          name: f,
-          url: `/uploads/${encodeURIComponent(f)}`,
-          size,
-          timestamp: mtime
-        });
-      });
-    }
+    processDir(SCREENSHOTS_DIR, "screenshot", "screenshots");
+    processDir(PDF_DIR, "pdf", "pdf");
+    processDir(EXCEL_DIR, "excel", "excel");
+    processDir(VIDEOS_DIR, "video", "videos");
+    processDir(UPLOADS_DIR, "upload", "uploads");
 
     res.json(list);
   } catch (error: any) {
@@ -453,13 +403,17 @@ app.post("/api/uploads", async (req, res) => {
       return;
     }
 
-    const { name, content } = req.body;
+    const { name, content, scriptId } = req.body;
     if (!name || !content) {
       res.status(400).json({ error: "Missing filename or content payload" });
       return;
     }
 
-    const safeName = path.basename(name).replace(/[^a-zA-Z0-9.\-_ ()]/g, "_");
+    const rawClean = path.basename(name).replace(/[^a-zA-Z0-9.\-_ ()]/g, "_");
+    const safeScriptId = scriptId || "default";
+    const safeName = rawClean.startsWith(`${safeScriptId}__`) ? rawClean : `${safeScriptId}__${rawClean}`;
+    const displayName = rawClean.startsWith(`${safeScriptId}__`) ? rawClean.substring(safeScriptId.length + 2) : rawClean;
+
     const filePath = path.join(UPLOADS_DIR, safeName);
     const buffer = Buffer.from(content, "base64");
     fs.writeFileSync(filePath, buffer);
@@ -469,6 +423,8 @@ app.post("/api/uploads", async (req, res) => {
       artifact: {
         type: "upload",
         name: safeName,
+        displayName,
+        scriptId: safeScriptId,
         url: `/uploads/${encodeURIComponent(safeName)}`
       }
     });
@@ -1475,7 +1431,8 @@ app.get("/api/stream-run/:runId", (req, res) => {
     runDetails.files,
     (cookies) => {
       sendEvent("cookies", cookies);
-    }
+    },
+    runDetails.scriptId
   )
     .then(async (result) => {
       sendEvent("done", { success: true, result });

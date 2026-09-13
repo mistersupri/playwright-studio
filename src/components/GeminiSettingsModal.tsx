@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Settings, X, ShieldAlert, CheckCircle2, DollarSign, Calculator, HelpCircle } from "lucide-react";
 
 interface GeminiSettingsModalProps {
+  key?: React.Key;
   isOpen: boolean;
   onClose: () => void;
   apiKey: string;
