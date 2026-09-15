@@ -7,6 +7,76 @@ import { encryptBuffer } from "./encryption";
 import { execSync } from "child_process";
 import { solveCaptcha, solveCaptchaFromBuffer, binarizeImage } from "./captchaSolver";
 
+function getMappedUploadPath(filePath: any, scriptId?: string): any {
+  if (typeof filePath !== "string" || !scriptId) {
+    return filePath;
+  }
+  try {
+    const resolvedPath = path.resolve(filePath);
+    const uploadsDir = path.join(process.cwd(), "uploads");
+    if (resolvedPath.startsWith(uploadsDir)) {
+      const filename = path.basename(resolvedPath);
+      if (!filename.startsWith(`${scriptId}__`)) {
+        const mappedFilename = `${scriptId}__${filename}`;
+        const mappedPath = path.join(uploadsDir, mappedFilename);
+        if (fs.existsSync(mappedPath)) {
+          return mappedPath;
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore and fallback
+  }
+  return filePath;
+}
+
+function mapArgs(args: any[], scriptId?: string): any[] {
+  return args.map(arg => {
+    if (typeof arg === "string") {
+      return getMappedUploadPath(arg, scriptId);
+    }
+    if (Array.isArray(arg)) {
+      return mapArgs(arg, scriptId);
+    }
+    return arg;
+  });
+}
+
+function proxyFs(origFs: any, scriptId?: string): any {
+  if (!origFs) return origFs;
+  return new Proxy(origFs, {
+    get(target, prop, receiver) {
+      if (prop === "promises") {
+        return proxyFsPromises(Reflect.get(target, prop, receiver), scriptId);
+      }
+      const val = Reflect.get(target, prop, receiver);
+      if (typeof val === "function") {
+        return function(...args: any[]) {
+          const mappedArgs = mapArgs(args, scriptId);
+          return val.apply(target, mappedArgs);
+        };
+      }
+      return val;
+    }
+  });
+}
+
+function proxyFsPromises(origFsPromises: any, scriptId?: string): any {
+  if (!origFsPromises) return origFsPromises;
+  return new Proxy(origFsPromises, {
+    get(target, prop, receiver) {
+      const val = Reflect.get(target, prop, receiver);
+      if (typeof val === "function") {
+        return function(...args: any[]) {
+          const mappedArgs = mapArgs(args, scriptId);
+          return val.apply(target, mappedArgs);
+        };
+      }
+      return val;
+    }
+  });
+}
+
 const BUILTIN_MODULES = new Set([
   "assert", "async_hooks", "buffer", "child_process", "cluster", "console",
   "constants", "crypto", "dgram", "diagnostics_channel", "dns", "domain",
@@ -663,6 +733,29 @@ export async function runScript(
   };
 
   const startTime = Date.now();
+  const tempUploadCopies: string[] = [];
+  const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+
+  if (scriptId) {
+    try {
+      const uFiles = fs.readdirSync(UPLOADS_DIR);
+      const prefix = `${scriptId}__`;
+      for (const file of uFiles) {
+        if (file.startsWith(prefix)) {
+          const originalName = file.substring(prefix.length);
+          const originalPath = path.join(UPLOADS_DIR, originalName);
+          const prefixedPath = path.join(UPLOADS_DIR, file);
+          
+          if (!fs.existsSync(originalPath)) {
+            fs.copyFileSync(prefixedPath, originalPath);
+            tempUploadCopies.push(originalPath);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Failed to set up temporary un-prefixed upload files:", err);
+    }
+  }
   
   const workspaceDir = path.join(process.cwd(), "temp_workspaces", `playwright-workspace-${runId}`);
 
@@ -878,6 +971,15 @@ export async function runScript(
 
     runner.isCompleted = true;
     activeRuns.delete(runId);
+
+    // Clean up temporary un-prefixed upload files
+    for (const tempPath of tempUploadCopies) {
+      try {
+        if (fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+      } catch (e) {}
+    }
 
     // Clean up temporary files workspace directory
     if (fs.existsSync(workspaceDir)) {
@@ -1394,6 +1496,20 @@ export async function runScript(
     }
 
     const customRequire: any = (moduleName: string) => {
+      if (moduleName === "fs" || moduleName === "node:fs") {
+        try {
+          return proxyFs(wsRequire("fs"), scriptId);
+        } catch {
+          return proxyFs(rootRequire("fs"), scriptId);
+        }
+      }
+      if (moduleName === "fs/promises" || moduleName === "node:fs/promises") {
+        try {
+          return proxyFsPromises(wsRequire("fs/promises"), scriptId);
+        } catch {
+          return proxyFsPromises(rootRequire("fs/promises"), scriptId);
+        }
+      }
       try {
         return wsRequire(moduleName);
       } catch (wsErr: any) {
