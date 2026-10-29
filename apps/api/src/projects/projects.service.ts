@@ -6,7 +6,7 @@ import { decryptJson, encryptJson } from "../common/crypto.js";
 import { config } from "../config.js";
 import { newId } from "../common/ids.js";
 import { type Database, InjectDb } from "../database/database.module.js";
-import { artifacts, type Project, projects, projectVersions, users } from "../database/schema.js";
+import { artifacts, browserSessions, type Project, projects, projectVersions, users } from "../database/schema.js";
 
 export interface ProjectFile {
   name: string;
@@ -35,6 +35,7 @@ export class ProjectsService {
       id: p.id,
       name: p.name,
       isPrivate: p.isPrivate,
+      keepSession: p.keepSession,
       ownerId: p.ownerId,
       ownerName: ownerName ?? null,
       fileCount: decryptJson<ProjectFile[]>(p.filesEnc).length,
@@ -124,11 +125,16 @@ export class ProjectsService {
     return this.detail(p);
   }
 
-  async update(id: string, userId: string, input: { name?: string; isPrivate?: boolean }) {
+  async update(id: string, userId: string, input: { name?: string; isPrivate?: boolean; keepSession?: boolean }) {
     await this.owned(id, userId);
     const [p] = await this.db
       .update(projects)
-      .set({ ...(input.name ? { name: input.name.trim() } : {}), ...(input.isPrivate !== undefined ? { isPrivate: input.isPrivate } : {}), updatedAt: new Date() })
+      .set({
+        ...(input.name ? { name: input.name.trim() } : {}),
+        ...(input.isPrivate !== undefined ? { isPrivate: input.isPrivate } : {}),
+        ...(input.keepSession !== undefined ? { keepSession: input.keepSession } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(projects.id, id))
       .returning();
     return this.detail(p);
@@ -156,6 +162,36 @@ export class ProjectsService {
       .where(eq(projectVersions.projectId, id))
       .orderBy(desc(projectVersions.createdAt));
     return rows.map((v) => ({ id: v.id, name: v.name, createdAt: v.createdAt, files: decryptJson<ProjectFile[]>(v.filesEnc) }));
+  }
+
+  async sessionInfo(id: string, userId: string) {
+    const p = await this.readable(id, userId);
+    const [row] = await this.db
+      .select({ updatedAt: browserSessions.updatedAt })
+      .from(browserSessions)
+      .where(and(eq(browserSessions.projectId, id), eq(browserSessions.userId, userId)));
+    return { keepSession: p.keepSession, savedAt: row?.updatedAt ?? null };
+  }
+
+  async clearSession(id: string, userId: string) {
+    await this.readable(id, userId);
+    await this.db.delete(browserSessions).where(and(eq(browserSessions.projectId, id), eq(browserSessions.userId, userId)));
+  }
+
+  async loadSession(projectId: string, userId: string): Promise<unknown | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(browserSessions)
+      .where(and(eq(browserSessions.projectId, projectId), eq(browserSessions.userId, userId)));
+    return row ? decryptJson(row.stateEnc) : undefined;
+  }
+
+  async saveSession(projectId: string, userId: string, state: unknown) {
+    const stateEnc = encryptJson(state);
+    await this.db
+      .insert(browserSessions)
+      .values({ projectId, userId, stateEnc })
+      .onConflictDoUpdate({ target: [browserSessions.projectId, browserSessions.userId], set: { stateEnc, updatedAt: new Date() } });
   }
 
   private async snapshot(p: Project) {

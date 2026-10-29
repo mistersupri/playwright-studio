@@ -17,6 +17,12 @@ export interface WorkerStart {
   packagesDir: string;
   appRoot: string;
   interactive: boolean;
+  /** "record" opens startUrl and waits for the person to drive the page. */
+  mode: "script" | "record";
+  startUrl?: string;
+  /** Playwright storageState to start from, and whether to report it back at the end. */
+  storageState?: unknown;
+  saveSession: boolean;
 }
 
 export type ParentMessage =
@@ -28,7 +34,19 @@ export type ParentMessage =
   | { type: "click"; x: number; y: number }
   | { type: "type"; text: string }
   | { type: "key"; key: string }
-  | { type: "wheel"; x: number; y: number; deltaX: number; deltaY: number };
+  | { type: "wheel"; x: number; y: number; deltaX: number; deltaY: number }
+  | { type: "navigate"; url: string }
+  | { type: "inspect"; x: number; y: number }
+  | { type: "record"; on: boolean };
+
+/** One recorded action. Rendered to code in the browser so steps can be merged and edited. */
+export type RecordedStep =
+  | { action: "goto"; url: string }
+  | { action: "click"; locator: string }
+  | { action: "fill"; locator: string; value: string; secret: boolean }
+  | { action: "press"; key: string; locator?: string }
+  | { action: "check"; locator: string; checked: boolean }
+  | { action: "select"; locator: string; value: string };
 
 export type LogSource = "script" | "browser" | "system";
 export type LogLevel = "log" | "info" | "success" | "warning" | "error";
@@ -64,4 +82,9 @@ export type WorkerMessage =
   | { type: "choice"; selector: string; options: ChoiceOption[] }
   | { type: "paused"; paused: boolean; line?: number }
   | { type: "gemini-used" }
+  | { type: "url"; url: string }
+  | { type: "step"; step: RecordedStep }
+  | { type: "recording"; on: boolean }
+  | { type: "inspected"; x: number; y: number; box: { x: number; y: number; width: number; height: number } | null; locator: string | null; tag: string | null }
+  | { type: "session"; state: unknown }
   | { type: "done"; status: "success" | "failed" | "stopped"; error?: string };

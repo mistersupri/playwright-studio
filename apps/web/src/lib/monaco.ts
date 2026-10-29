@@ -15,20 +15,59 @@ self.MonacoEnvironment = {
 // Bundle Monaco instead of loading it from a CDN, so the editor works offline and under a strict CSP.
 loader.config({ monaco });
 
-/** Globals the run worker injects into every script. */
+/** Globals the run worker injects into every script, typed against Playwright's own definitions. */
 const RUNTIME_TYPES = `
-declare const page: any;
-declare const context: any;
-declare const browser: any;
-declare const chromium: any;
-/** Pause the run until you press Resume. */
+declare const page: import("playwright-core/types/types").Page & {
+  /** Read the text in a CAPTCHA image element with OCR. */
+  solveCaptcha(selector: string, options?: CaptchaOptions): Promise<{ text: string; confidence: number }>;
+  /** Ask the person watching the run to pick which matches to keep. */
+  chooseElements(selector: string): Promise<import("playwright-core/types/types").Locator[]>;
+};
+declare const context: import("playwright-core/types/types").BrowserContext;
+declare const browser: import("playwright-core/types/types").Browser;
+declare const chromium: import("playwright-core/types/types").BrowserType;
+interface CaptchaOptions {
+  /** Only these characters are allowed in the answer. */
+  charWhitelist?: string;
+  /** Strip spaces and punctuation from the answer. */
+  cleanText?: boolean;
+  /** High-contrast pass before OCR. */
+  binarize?: boolean;
+  /** Use Gemini instead of Tesseract (needs a key in Gemini settings). */
+  useGemini?: boolean;
+}
+/** Pause the run until you press Resume in the browser panel. */
 declare function pause(label?: string): Promise<void>;
 /** Read the text in a CAPTCHA image element with OCR. */
-declare function solveCaptcha(selector: string, options?: { charWhitelist?: string; cleanText?: boolean; binarize?: boolean; useGemini?: boolean }): Promise<{ text: string; confidence: number }>;
-declare function solveCaptchaFromImage(source: any, options?: { charWhitelist?: string; cleanText?: boolean; binarize?: boolean; useGemini?: boolean }): Promise<{ text: string; confidence: number }>;
-/** Ask the person watching the run to pick which matches to keep. */
-declare function chooseElements(selector: string): Promise<any[]>;
+declare function solveCaptcha(selector: string, options?: CaptchaOptions): Promise<{ text: string; confidence: number }>;
+/** OCR a CAPTCHA from an image Buffer, file path or data URL. */
+declare function solveCaptchaFromImage(source: unknown, options?: CaptchaOptions): Promise<{ text: string; confidence: number }>;
+/** Ask the person watching the run to pick which matches to keep. Unattended runs keep all of them. */
+declare function chooseElements(selector: string): Promise<import("playwright-core/types/types").Locator[]>;
+/** Data runs: the current row, keyed by the header of the data file. */
+declare const row: Record<string, string>;
+/** Data runs: zero-based index of the current row. */
+declare const rowIndex: number;
+/** Data runs: every row of the data file. */
+declare const data: Record<string, string>[];
+declare const require: (id: string) => any;
+declare const process: { env: Record<string, string | undefined>; cwd(): string; [key: string]: any };
+declare const Buffer: any;
+declare const __dirname: string;
+declare const __filename: string;
 `;
+
+let typesLoaded = false;
+/** Loads the ~2 MB of Playwright type definitions after the editor is on screen. */
+export async function loadPlaywrightTypes() {
+  if (typesLoaded) return;
+  typesLoaded = true;
+  const { types, protocol, structs } = await import("virtual:playwright-types");
+  const base = "file:///node_modules/playwright-core/types";
+  js.addExtraLib(types, `${base}/types.d.ts`);
+  js.addExtraLib(protocol, `${base}/protocol.d.ts`);
+  js.addExtraLib(structs, `${base}/structs.d.ts`);
+}
 
 const js = monaco.typescript.javascriptDefaults;
 js.setCompilerOptions({
@@ -36,6 +75,7 @@ js.setCompilerOptions({
   allowNonTsExtensions: true,
   allowJs: true,
   checkJs: false,
+  moduleResolution: monaco.typescript.ModuleResolutionKind.NodeJs,
 });
 js.setDiagnosticsOptions({
   noSemanticValidation: false,

@@ -5,7 +5,7 @@ import { api, errorMessage } from "@/lib/api";
 import { isActive, useRun } from "@/stores/run";
 import { useWorkbench } from "@/stores/workbench";
 
-const EVENTS = ["status", "log", "preview", "network", "cookies", "choice", "artifact", "done"] as const;
+const EVENTS = ["status", "log", "preview", "network", "cookies", "choice", "artifact", "url", "step", "recording", "inspected", "done"] as const;
 
 let source: EventSource | null = null;
 
@@ -40,19 +40,20 @@ export function useRunControls() {
   const finished = useCallback(() => {
     qc.invalidateQueries({ queryKey: ["artifacts"] });
     qc.invalidateQueries({ queryKey: ["runs"] });
+    qc.invalidateQueries({ queryKey: ["session"] });
     const { phase, error } = useRun.getState();
     if (phase === "success") toast.success("Run finished");
     else if (phase === "failed") toast.error("Run failed", { description: error ?? undefined });
   }, [qc]);
 
   const start = useCallback(
-    async (entryFile?: string) => {
+    async (entryFile?: string, record?: { url: string }) => {
       if (busy.current || isActive(useRun.getState().phase)) return;
       busy.current = true;
       const wb = useWorkbench.getState();
       const file = entryFile ?? wb.activeFile;
       const s = wb.settings;
-      useRun.getState().begin(file);
+      useRun.getState().begin(file, Boolean(record));
       try {
         const { runId } = await api.post<{ runId: string }>("/runs", {
           projectId: wb.project?.id,
@@ -68,6 +69,7 @@ export function useRunControls() {
           recordVideo: s.recordVideo,
           debug: s.debug,
           breakpoints: s.debug ? (wb.breakpoints[`${wb.project?.id ?? ""}/${file}`] ?? []) : [],
+          record,
         });
         useRun.getState().attach(runId);
         listen(runId, finished);
@@ -101,6 +103,10 @@ export function useRunControls() {
     key: (key: string) => call("input", { type: "key", key }),
     wheel: (x: number, y: number, deltaX: number, deltaY: number) => call("input", { type: "wheel", x, y, deltaX, deltaY }),
     choose: (indexes: number[]) => call("choice", { indexes }),
+    record: (url: string) => start(undefined, { url }),
+    setRecording: (on: boolean) => call("record", { on }),
+    navigate: (url: string) => call("input", { type: "navigate", url }),
+    inspect: (x: number, y: number) => call("input", { type: "inspect", x, y }),
   };
 }
 

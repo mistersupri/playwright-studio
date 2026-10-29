@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Artifact, ChoiceOption, Cookie, LogLine, NetworkEvent, RunStatus } from "@/lib/types";
+import type { Artifact, ChoiceOption, Cookie, Inspected, LogLine, NetworkEvent, RecordedStep, RunStatus } from "@/lib/types";
 
 export type RunPhase = "idle" | "starting" | RunStatus;
 
@@ -17,8 +17,16 @@ interface RunState {
   pausedFile: string | null;
   choice: { selector: string; options: ChoiceOption[] } | null;
   startedAt: number | null;
+  url: string | null;
+  steps: RecordedStep[];
+  recording: boolean;
+  /** True for runs started with Record rather than Run. */
+  recordOnly: boolean;
+  inspected: Inspected | null;
 
-  begin: (file: string) => void;
+  begin: (file: string, recordOnly?: boolean) => void;
+  clearSteps: () => void;
+  setInspected: (i: Inspected | null) => void;
   attach: (runId: string) => void;
   fail: (message: string) => void;
   push: (type: string, data: unknown) => void;
@@ -43,8 +51,13 @@ export const useRun = create<RunState>()((set, get) => ({
   pausedFile: null,
   choice: null,
   startedAt: null,
+  url: null,
+  steps: [],
+  recording: false,
+  recordOnly: false,
+  inspected: null,
 
-  begin: (file) =>
+  begin: (file, recordOnly = false) =>
     set({
       runId: null,
       phase: "starting",
@@ -58,7 +71,14 @@ export const useRun = create<RunState>()((set, get) => ({
       pausedFile: file,
       choice: null,
       startedAt: Date.now(),
+      url: null,
+      // Keep recorded steps across runs until they are inserted or cleared.
+      recording: false,
+      recordOnly,
+      inspected: null,
     }),
+  clearSteps: () => set({ steps: [] }),
+  setInspected: (inspected) => set({ inspected }),
   attach: (runId) => set({ runId, phase: "running" }),
   fail: (message) =>
     set((s) => ({
@@ -102,12 +122,24 @@ export const useRun = create<RunState>()((set, get) => ({
       case "artifact":
         set({ artifacts: [...get().artifacts, data as Artifact] });
         break;
+      case "url":
+        set({ url: (data as { url: string }).url });
+        break;
+      case "step":
+        set({ steps: [...get().steps, data as RecordedStep] });
+        break;
+      case "recording":
+        set({ recording: (data as { on: boolean }).on });
+        break;
+      case "inspected":
+        set({ inspected: data as Inspected });
+        break;
       case "choice":
         set({ choice: data as RunState["choice"] });
         break;
       case "done": {
         const d = data as { status: RunStatus; error?: string };
-        set({ phase: d.status, error: d.error ?? null, paused: false, pausedLine: null, choice: null });
+        set({ phase: d.status, error: d.error ?? null, paused: false, pausedLine: null, choice: null, recording: false, inspected: null });
         break;
       }
     }

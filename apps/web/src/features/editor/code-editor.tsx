@@ -7,7 +7,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCollab } from "@/hooks/use-collab";
 import { api, errorMessage } from "@/lib/api";
-import { languageFor, monaco } from "@/lib/monaco";
+import { languageFor, loadPlaywrightTypes, monaco } from "@/lib/monaco";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { useRun } from "@/stores/run";
@@ -24,6 +24,8 @@ export function CodeEditor() {
   const toggleBreakpoint = useWorkbench((s) => s.toggleBreakpoint);
   const debug = useWorkbench((s) => s.settings.debug);
   const reveal = useWorkbench((s) => s.reveal);
+  const insertion = useWorkbench((s) => s.insertion);
+  const [mounted, setMounted] = useState(false);
   const theme = useTheme((s) => s.theme);
   const breakpoints = useBreakpoints(activeFile);
   const pausedLine = useRun((s) => (s.paused && s.pausedFile === activeFile ? s.pausedLine : null));
@@ -74,9 +76,27 @@ export function CodeEditor() {
     });
   }, [reveal, activeFile]);
 
+  // Recorder output lands at the cursor. Waits until the editor (and the right file) is showing.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!mounted || !editor || !insertion || insertion.file !== activeFile) return;
+    const selection = editor.getSelection() ?? new monaco.Selection(1, 1, 1, 1);
+    const model = editor.getModel();
+    const lineText = model?.getLineContent(selection.startLineNumber) ?? "";
+    const atLineStart = lineText.slice(0, selection.startColumn - 1).trim() === "";
+    const text = `${atLineStart ? "" : "\n"}${insertion.code}\n`;
+    editor.pushUndoStop();
+    editor.executeEdits("recorder", [{ range: selection, text, forceMoveMarkers: true }]);
+    editor.pushUndoStop();
+    editor.focus();
+    useWorkbench.setState({ insertion: null });
+  }, [insertion, activeFile, mounted]);
+
   const onMount: OnMount = (editor) => {
     editorRef.current = editor;
     decorations.current = editor.createDecorationsCollection();
+    setMounted(true);
+    void loadPlaywrightTypes();
     editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
         latest.current.toggleBreakpoint(latest.current.activeFile, e.target.position.lineNumber);

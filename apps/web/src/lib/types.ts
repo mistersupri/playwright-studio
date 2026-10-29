@@ -14,6 +14,7 @@ export interface ProjectSummary {
   id: string;
   name: string;
   isPrivate: boolean;
+  keepSession: boolean;
   ownerId: string;
   ownerName: string | null;
   fileCount: number;
@@ -151,4 +152,20 @@ export interface PackageInfo {
   name: string;
   version: string;
   source: "bundled" | "installed";
+}
+
+export type RecordedStep =
+  | { action: "goto"; url: string }
+  | { action: "click"; locator: string }
+  | { action: "fill"; locator: string; value: string; secret: boolean }
+  | { action: "press"; key: string; locator?: string }
+  | { action: "check"; locator: string; checked: boolean }
+  | { action: "select"; locator: string; value: string };
+
+export interface Inspected {
+  x: number;
+  y: number;
+  box: { x: number; y: number; width: number; height: number } | null;
+  locator: string | null;
+  tag: string | null;
 }

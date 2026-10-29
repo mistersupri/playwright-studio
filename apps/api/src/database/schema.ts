@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 
@@ -28,6 +28,7 @@ export const projects = pgTable(
     name: text("name").notNull(),
     filesEnc: text("files_enc").notNull(),
     isPrivate: boolean("is_private").notNull().default(true),
+    keepSession: boolean("keep_session").notNull().default(false),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -139,6 +140,22 @@ export const schedules = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("schedules_next_idx").on(t.status, t.nextRunAt)],
+);
+
+/** Playwright storageState (cookies + local storage) kept between runs, per project and user. */
+export const browserSessions = pgTable(
+  "browser_sessions",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    stateEnc: text("state_enc").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
 );
 
 export const userSettings = pgTable("user_settings", {

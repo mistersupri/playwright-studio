@@ -9,8 +9,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import { type Browser, type BrowserContext, type BrowserContextOptions, chromium, type Page } from "playwright";
 import { binarizeImage, type CaptchaSolveOptions, solveCaptcha, solveCaptchaFromBuffer } from "./captcha-solver.js";
+import { describe } from "./locator.js";
 import { importsToRequires } from "./transform.js";
 import type { ChoiceOption, LogLevel, LogSource, NetworkEvent, ParentMessage, WorkerMessage, WorkerStart } from "./protocol.js";
 
@@ -25,6 +26,7 @@ let finished = false;
 
 let pauseGate: { promise: Promise<void>; release: () => void } | null = null;
 let pendingChoice: ((indexes: number[]) => void) | null = null;
+let recording = false;
 
 function redact(text: string): string {
   let out = text;
@@ -293,6 +295,7 @@ function watchPage(target: Page) {
   target.on("framenavigated", (frame) => {
     if (frame !== target.mainFrame()) return;
     system(`Navigated to ${frame.url()}`);
+    send({ type: "url", url: frame.url() });
     void sendCookies();
   });
 }
@@ -307,6 +310,11 @@ async function sendCookies() {
 async function teardown() {
   if (previewTimer) clearInterval(previewTimer);
   await sendCookies();
+  if (opts?.saveSession && context) {
+    try {
+      send({ type: "session", state: await context.storageState() });
+    } catch {}
+  }
   const video = opts?.recordVideo ? page?.video() : null;
   try {
     if (page && !page.isClosed()) await page.close();
@@ -356,7 +364,9 @@ async function run(start: WorkerStart) {
         }
       : {}),
     ...(opts.recordVideo ? { recordVideo: { dir: path.join(process.cwd(), ".video"), size: opts.viewport } } : {}),
+    ...(opts.storageState ? { storageState: opts.storageState as BrowserContextOptions["storageState"] } : {}),
   });
+  if (opts.storageState) system("Restored the saved browser session (cookies and local storage).");
 
   if (opts.stealth) {
     system("Stealth mode: masking automation fingerprints.");
@@ -377,6 +387,11 @@ async function run(start: WorkerStart) {
   page = await context.newPage();
   watchPage(page);
   startPreview();
+
+  if (opts.mode === "record") {
+    await recordSession(opts.startUrl ?? "about:blank");
+    return;
+  }
 
   const safePage = pausablePage(page);
   const scriptConsole = {
@@ -418,7 +433,47 @@ async function run(start: WorkerStart) {
   system("Script finished.", "success");
 }
 
-process.on("message", async (raw: ParentMessage) => {
+function setRecording(on: boolean) {
+  recording = on;
+  send({ type: "recording", on });
+}
+
+/** Record mode: open the start page and keep the browser up until the person stops. */
+async function recordSession(url: string) {
+  setRecording(true);
+  if (url !== "about:blank") {
+    system(`Opening ${url} for recording.`);
+    send({ type: "step", step: { action: "goto", url } });
+    await page!.goto(url, { waitUntil: "domcontentloaded" }).catch((err: Error) => system(err.message, "error"));
+  }
+  system("Recording. Use the page, then insert the steps into your script. Stop ends the session.");
+  await new Promise<void>(() => {});
+}
+
+const EDIT_KEYS = new Set(["Backspace", "Delete"]);
+const SILENT_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Shift", "Control", "Alt", "Meta"]);
+
+/** After typing, record the field's whole value so the step stays a single fill(). */
+async function recordFill() {
+  if (!recording || !page) return;
+  const info = await describe(page, { active: true });
+  if (!info?.isEditable) return;
+  send({
+    type: "step",
+    step: { action: "fill", locator: info.locator, value: info.isPassword ? "" : (info.value ?? ""), secret: info.isPassword },
+  });
+}
+
+const INPUT = new Set<ParentMessage["type"]>(["click", "type", "key", "navigate", "wheel"]);
+let inputChain: Promise<unknown> = Promise.resolve();
+
+process.on("message", (raw: ParentMessage) => {
+  // Page input must apply in the order it was sent; the recorder awaits between steps.
+  if (INPUT.has(raw.type)) inputChain = inputChain.then(() => handle(raw)).catch(() => {});
+  else void handle(raw);
+});
+
+async function handle(raw: ParentMessage) {
   switch (raw.type) {
     case "start":
       try {
@@ -447,22 +502,58 @@ process.on("message", async (raw: ParentMessage) => {
       pendingChoice?.(raw.indexes);
       pendingChoice = null;
       break;
-    case "click":
-      await page?.mouse.click(Math.round(raw.x), Math.round(raw.y)).catch(() => {});
-      system(`Clicked at ${Math.round(raw.x)}, ${Math.round(raw.y)}.`);
+    case "click": {
+      if (!page) break;
+      if (recording) {
+        const info = await describe(page, { x: raw.x, y: raw.y });
+        if (info) send({ type: "step", step: { action: "click", locator: info.locator } });
+      }
+      await page.mouse.click(Math.round(raw.x), Math.round(raw.y)).catch(() => {});
+      if (!recording) system(`Clicked at ${Math.round(raw.x)}, ${Math.round(raw.y)}.`);
       break;
+    }
     case "type":
       await page?.keyboard.type(raw.text).catch(() => {});
+      await recordFill();
       break;
-    case "key":
-      await page?.keyboard.press(raw.key).catch(() => {});
+    case "key": {
+      if (!page) break;
+      const base = raw.key.split("+").pop()!;
+      const before = recording && !EDIT_KEYS.has(base) && !SILENT_KEYS.has(base) ? await describe(page, { active: true }) : null;
+      await page.keyboard.press(raw.key).catch(() => {});
+      if (!recording) break;
+      if (EDIT_KEYS.has(base)) await recordFill();
+      else if (!SILENT_KEYS.has(base) || raw.key.includes("+")) {
+        send({ type: "step", step: { action: "press", key: raw.key, locator: before?.isEditable ? before.locator : undefined } });
+      }
+      break;
+    }
+    case "navigate": {
+      if (!page) break;
+      // "localhost:3000/x" has a colon but no scheme, so look for "://" or a known scheme.
+      const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw.url) || /^(about|data|file):/i.test(raw.url)
+        ? raw.url
+        : `${/^(localhost|127\.|\[::1\])/.test(raw.url) ? "http" : "https"}://${raw.url}`;
+      if (recording) send({ type: "step", step: { action: "goto", url } });
+      await page.goto(url, { waitUntil: "domcontentloaded" }).catch((err: Error) => system(err.message, "error"));
+      break;
+    }
+    case "inspect": {
+      if (!page) break;
+      const info = await describe(page, { x: raw.x, y: raw.y });
+      send({ type: "inspected", x: raw.x, y: raw.y, box: info?.box ?? null, locator: info?.locator ?? null, tag: info?.tag ?? null });
+      break;
+    }
+    case "record":
+      setRecording(raw.on);
+      system(raw.on ? "Recording your actions on the page." : "Stopped recording.");
       break;
     case "wheel":
       await page?.mouse.move(raw.x, raw.y).catch(() => {});
       await page?.mouse.wheel(raw.deltaX, raw.deltaY).catch(() => {});
       break;
   }
-});
+}
 
 process.on("unhandledRejection", (reason) => {
   log("system", "error", `Unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`);

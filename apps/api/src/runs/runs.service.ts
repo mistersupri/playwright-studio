@@ -15,7 +15,9 @@ import { type Database, InjectDb } from "../database/database.module.js";
 import { runs } from "../database/schema.js";
 import { type ProjectFile, ProjectsService } from "../projects/projects.service.js";
 import { VariablesService } from "../variables/variables.service.js";
-import type { ChoiceOption, LogLevel, LogSource, NetworkEvent, ParentMessage, WorkerMessage, WorkerStart } from "./worker/protocol.js";
+import type {
+  ChoiceOption, LogLevel, LogSource, NetworkEvent, ParentMessage, RecordedStep, WorkerMessage, WorkerStart,
+} from "./worker/protocol.js";
 import { importsToRequires } from "./worker/transform.js";
 
 const WORKER = fileURLToPath(new URL("./worker/run-worker.js", import.meta.url));
@@ -45,6 +47,8 @@ export interface StartRunInput {
   debug?: boolean;
   breakpoints?: number[];
   trigger?: "manual" | "schedule";
+  /** Open a page for recording instead of running the entry file. */
+  record?: { url: string };
 }
 
 type RunEvent =
@@ -55,6 +59,10 @@ type RunEvent =
   | { type: "cookies"; data: unknown[] }
   | { type: "choice"; data: { selector: string; options: ChoiceOption[] } | null }
   | { type: "artifact"; data: ArtifactDto }
+  | { type: "url"; data: { url: string } }
+  | { type: "step"; data: RecordedStep }
+  | { type: "recording"; data: { on: boolean } }
+  | { type: "inspected"; data: Extract<WorkerMessage, { type: "inspected" }> }
   | { type: "done"; data: { status: RunStatus; error?: string } };
 
 type RunStatus = "running" | "success" | "failed" | "stopped";
@@ -82,6 +90,10 @@ interface Session {
   timers: NodeJS.Timeout[];
   scanning: Promise<void> | null;
   timedOut: boolean;
+  url: string | null;
+  steps: RecordedStep[];
+  recording: boolean;
+  saveSessionFor: string | null;
 }
 
 function walk(dir: string, root = dir, out: string[] = []): string[] {
@@ -119,11 +131,15 @@ export class RunsService implements OnApplicationShutdown {
       );
     }
     let projectId: string | null = null;
+    let storageState: unknown;
+    let keepSession = false;
     if (input.projectId) {
       const project = await this.projects.readable(input.projectId, input.userId);
       projectId = project.id;
+      keepSession = project.keepSession;
+      if (keepSession) storageState = await this.projects.loadSession(project.id, input.userId);
     }
-    const entry = input.files.find((f) => f.name === input.entryFile);
+    const entry = input.record ? { name: input.entryFile, code: "" } : input.files.find((f) => f.name === input.entryFile);
     if (!entry) throw new NotFoundException(`File ${input.entryFile} is not in the project.`);
 
     const id = newId(14);
@@ -148,7 +164,7 @@ export class RunsService implements OnApplicationShutdown {
       userId: input.userId,
       projectId,
       projectName: input.projectName,
-      entryFile: input.entryFile,
+      entryFile: input.record ? "Recording" : input.entryFile,
       trigger: input.trigger ?? "manual",
       status: "running",
     });
@@ -175,6 +191,10 @@ export class RunsService implements OnApplicationShutdown {
       timers: [],
       scanning: null,
       timedOut: false,
+      url: null,
+      steps: [],
+      recording: false,
+      saveSessionFor: keepSession && projectId ? projectId : null,
     };
     this.sessions.set(id, session);
 
@@ -192,7 +212,8 @@ export class RunsService implements OnApplicationShutdown {
       }
     });
 
-    const limit = Math.min(input.timeoutSeconds ?? 120, config.maxRunSeconds);
+    // Recording sessions last as long as the server allows; people stop them when done.
+    const limit = input.record ? config.maxRunSeconds : Math.min(input.timeoutSeconds ?? 120, config.maxRunSeconds);
     session.timers.push(
       setTimeout(() => {
         if (session.status !== "running") return;
@@ -220,6 +241,10 @@ export class RunsService implements OnApplicationShutdown {
       packagesDir: config.paths.packages,
       appRoot: API_ROOT,
       interactive: (input.trigger ?? "manual") === "manual",
+      mode: input.record ? "record" : "script",
+      startUrl: input.record?.url,
+      storageState,
+      saveSession: keepSession,
     };
     this.send(session, { type: "start", payload: start });
     return { runId: id };
@@ -284,6 +309,29 @@ export class RunsService implements OnApplicationShutdown {
         session.paused = msg.paused;
         session.pausedLine = msg.paused ? msg.line : undefined;
         this.emit(session, this.statusEvent(session));
+        break;
+      case "url":
+        session.url = msg.url;
+        this.emit(session, { type: "url", data: { url: msg.url } });
+        break;
+      case "step":
+        session.steps.push(msg.step);
+        this.emit(session, { type: "step", data: msg.step });
+        break;
+      case "recording":
+        session.recording = msg.on;
+        this.emit(session, { type: "recording", data: { on: msg.on } });
+        break;
+      case "inspected":
+        this.emit(session, { type: "inspected", data: msg });
+        break;
+      case "session":
+        if (session.saveSessionFor) {
+          void this.projects
+            .saveSession(session.saveSessionFor, session.userId, msg.state)
+            .then(() => this.pushLog(session, { source: "system", level: "info", message: "Saved the browser session for the next run.", at: new Date().toISOString() }))
+            .catch((err) => this.logger.warn(`Could not save session: ${err.message}`));
+        }
         break;
       case "gemini-used":
         void this.settings.countCaptcha(session.userId).catch(() => {});
@@ -371,6 +419,9 @@ export class RunsService implements OnApplicationShutdown {
     if (s.cookies.length) listener({ type: "cookies", data: s.cookies });
     for (const a of s.artifacts) listener({ type: "artifact", data: a });
     if (s.preview) listener({ type: "preview", data: { image: s.preview } });
+    if (s.url) listener({ type: "url", data: { url: s.url } });
+    for (const step of s.steps) listener({ type: "step", data: step });
+    if (s.recording) listener({ type: "recording", data: { on: true } });
     if (s.choice) listener({ type: "choice", data: s.choice });
     if (s.status !== "running") {
       listener({ type: "done", data: { status: s.status, error: s.error } });

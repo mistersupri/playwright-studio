@@ -211,11 +211,11 @@ ScriptBench sudah bisa menulis, menjalankan dan mengamati script Playwright di b
 
 | # | Fitur | Fase | Status |
 | --- | --- | --- | --- |
-| F1 | Rekam aksi dari preview | 1 | Direncanakan |
-| F2 | Sesi login tersimpan | 1 | Direncanakan |
-| F3 | Autocomplete Playwright | 1 | Direncanakan |
-| F10 | Address bar | 1 | Direncanakan |
-| F11 | Inspector elemen | 1 | Direncanakan |
+| F1 | Rekam aksi dari preview | 1 | Selesai |
+| F2 | Sesi login tersimpan | 1 | Selesai |
+| F3 | Autocomplete Playwright | 1 | Selesai |
+| F10 | Address bar | 1 | Selesai |
+| F11 | Inspector elemen | 1 | Selesai |
 | F7 | Browser, perangkat, proxy | 2 | Direncanakan |
 | F9 | Playwright Trace | 2 | Direncanakan |
 | F8 | Run berbasis data | 2 | Direncanakan |

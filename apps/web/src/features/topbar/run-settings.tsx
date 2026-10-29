@@ -1,10 +1,16 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SlidersHorizontal } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useIsOwner } from "@/hooks/use-project";
+import { api, errorMessage } from "@/lib/api";
+import { formatRelative } from "@/lib/format";
+import type { Project } from "@/lib/types";
 import { type RunSettings as Settings, useWorkbench } from "@/stores/workbench";
 
 const VIEWPORTS = [
@@ -84,7 +90,67 @@ export function RunSettingsButton() {
             </li>
           ))}
         </ul>
+        <ProjectSession />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Per-project: keep cookies and local storage between runs so logins survive. */
+function ProjectSession() {
+  const project = useWorkbench((s) => s.project);
+  const markSaved = useWorkbench((s) => s.markSaved);
+  const isOwner = useIsOwner();
+  const qc = useQueryClient();
+  const session = useQuery({
+    queryKey: ["session", project?.id],
+    queryFn: () => api.get<{ keepSession: boolean; savedAt: string | null }>(`/projects/${project!.id}/session`),
+    enabled: Boolean(project),
+  });
+
+  const toggle = useMutation({
+    mutationFn: (keepSession: boolean) => api.patch<Project>(`/projects/${project!.id}`, { keepSession }),
+    onSuccess: (p) => {
+      markSaved({ ...useWorkbench.getState().project!, keepSession: p.keepSession });
+      qc.invalidateQueries({ queryKey: ["session", project?.id] });
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+  const clear = useMutation({
+    mutationFn: () => api.delete(`/projects/${project!.id}/session`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["session", project?.id] });
+      toast.success("Saved session cleared", { description: "The next run starts with an empty browser." });
+    },
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  if (!project) return null;
+  return (
+    <div className="border-t p-1.5">
+      <label className="flex cursor-pointer items-start gap-3 rounded-md px-2 py-1.5 hover:bg-accent">
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm">Keep browser session</span>
+          <span className="block text-xs text-muted-foreground">
+            This project reuses cookies and local storage from your last run, so you stay signed in.
+            {!isOwner && " Only the owner can change this."}
+          </span>
+        </span>
+        <Switch
+          checked={project.keepSession}
+          disabled={!isOwner || toggle.isPending}
+          onCheckedChange={(v) => toggle.mutate(v)}
+          className="mt-0.5"
+        />
+      </label>
+      {session.data?.savedAt && (
+        <div className="flex items-center justify-between gap-2 px-2 pb-1 text-xs text-muted-foreground">
+          <span className="tabular">Saved {formatRelative(session.data.savedAt)}</span>
+          <Button variant="ghost" size="xs" onClick={() => clear.mutate()} disabled={clear.isPending}>
+            Clear saved session
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

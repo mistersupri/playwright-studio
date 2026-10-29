@@ -19,6 +19,7 @@ const startSchema = z.object({
   recordVideo: z.boolean().optional(),
   debug: z.boolean().optional(),
   breakpoints: z.array(z.number().int().positive()).max(500).optional(),
+  record: z.object({ url: z.string().trim().max(2000) }).optional(),
 });
 
 @Controller("runs")
@@ -95,6 +96,13 @@ export class RunsController {
     this.runs.control(id, user.id, { type: "choice", indexes });
   }
 
+  @Post(":id/record")
+  @HttpCode(204)
+  record(@CurrentUser() user: SessionUser, @Param("id") id: string, @Body() body: unknown) {
+    const { on } = parse(z.object({ on: z.boolean() }), body);
+    this.runs.control(id, user.id, { type: "record", on });
+  }
+
   @Post(":id/input")
   @HttpCode(204)
   input(@CurrentUser() user: SessionUser, @Param("id") id: string, @Body() body: unknown) {
@@ -110,6 +118,8 @@ export class RunsController {
           deltaX: z.number().min(-5000).max(5000),
           deltaY: z.number().min(-5000).max(5000),
         }),
+        z.object({ type: z.literal("navigate"), url: z.string().trim().min(1).max(2000) }),
+        z.object({ type: z.literal("inspect"), x: z.number().min(0).max(4000), y: z.number().min(0).max(4000) }),
       ]),
       body,
     );

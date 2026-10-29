@@ -29,6 +29,8 @@ interface WorkbenchState {
   remoteRevision: number;
   /** Bumped when another panel wants the editor to reveal a position. */
   reveal: { file: string; line: number; column: number; length: number; nonce: number } | null;
+  /** Code waiting to be inserted at the editor cursor (recorder output). */
+  insertion: { file: string; code: string; nonce: number } | null;
 
   loadProject: (p: Project) => void;
   markSaved: (p: Project) => void;
@@ -44,6 +46,7 @@ interface WorkbenchState {
   updateSettings: (patch: Partial<RunSettings>) => void;
   setPanel: (panel: SidePanel) => void;
   revealAt: (file: string, line: number, column?: number, length?: number) => void;
+  insertAtCursor: (code: string) => void;
 }
 
 export const DEFAULT_SETTINGS: RunSettings = {
@@ -70,6 +73,7 @@ export const useWorkbench = create<WorkbenchState>()(
       panel: "files",
       remoteRevision: 0,
       reveal: null,
+      insertion: null,
 
       loadProject: (p) =>
         set({
@@ -128,6 +132,7 @@ export const useWorkbench = create<WorkbenchState>()(
       setPanel: (panel) => set({ panel }),
       revealAt: (file, line, column = 1, length = 0) =>
         set({ activeFile: file, reveal: { file, line, column, length, nonce: Date.now() } }),
+      insertAtCursor: (code) => set((s) => ({ insertion: { file: s.activeFile, code, nonce: Date.now() } })),
     }),
     {
       name: "sb-workbench",

@@ -46,7 +46,22 @@ export class ProjectsController {
 
   @Patch(":id")
   update(@CurrentUser() user: SessionUser, @Param("id") id: string, @Body() body: unknown) {
-    return this.projects.update(id, user.id, parse(z.object({ name: name.optional(), isPrivate: z.boolean().optional() }), body));
+    return this.projects.update(
+      id,
+      user.id,
+      parse(z.object({ name: name.optional(), isPrivate: z.boolean().optional(), keepSession: z.boolean().optional() }), body),
+    );
+  }
+
+  @Get(":id/session")
+  session(@CurrentUser() user: SessionUser, @Param("id") id: string) {
+    return this.projects.sessionInfo(id, user.id);
+  }
+
+  @Delete(":id/session")
+  @HttpCode(204)
+  clearSession(@CurrentUser() user: SessionUser, @Param("id") id: string) {
+    return this.projects.clearSession(id, user.id);
   }
 
   @Delete(":id")
