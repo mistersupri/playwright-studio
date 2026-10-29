@@ -22,6 +22,13 @@
       "when": 1793277783203,
       "tag": "0002_folders_run_options",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793278358887,
+      "tag": "0003_cron_notifications_tokens",
+      "breakpoints": true
     }
   ]
 }

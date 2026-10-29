@@ -46,7 +46,10 @@ export interface StartRunInput {
   recordVideo?: boolean;
   debug?: boolean;
   breakpoints?: number[];
-  trigger?: "manual" | "schedule";
+  trigger?: "manual" | "schedule" | "api";
+  scheduleId?: string | null;
+  /** Extra plain environment values for this run only (API callers). */
+  extraEnv?: Record<string, string>;
   /** Open a page for recording instead of running the entry file. */
   record?: { url: string };
   browser?: "chromium" | "firefox" | "webkit";
@@ -83,6 +86,22 @@ type RunEvent =
 
 type RunStatus = "running" | "success" | "failed" | "stopped";
 
+export interface FinishedRun {
+  runId: string;
+  userId: string;
+  projectId: string | null;
+  projectName: string;
+  entryFile: string;
+  scheduleId: string | null;
+  trigger: "manual" | "schedule" | "api";
+  status: Exclude<RunStatus, "running">;
+  error?: string;
+  startedAt: Date;
+  finishedAt: Date;
+  artifactCount: number;
+  firstErrorLine?: string;
+}
+
 interface Session {
   id: string;
   userId: string;
@@ -110,6 +129,8 @@ interface Session {
   steps: RecordedStep[];
   recording: boolean;
   saveSessionFor: string | null;
+  meta: { projectName: string; entryFile: string; scheduleId: string | null; trigger: "manual" | "schedule" | "api"; startedAt: Date };
+  waiters: ((r: FinishedRun) => void)[];
 }
 
 function walk(dir: string, root = dir, out: string[] = []): string[] {
@@ -126,6 +147,12 @@ function walk(dir: string, root = dir, out: string[] = []): string[] {
 export class RunsService implements OnApplicationShutdown {
   private readonly logger = new Logger(RunsService.name);
   private readonly sessions = new Map<string, Session>();
+  private readonly finishedListeners: ((r: FinishedRun) => void)[] = [];
+
+  /** Called once per run when it ends, whatever the outcome. */
+  onFinished(listener: (r: FinishedRun) => void) {
+    this.finishedListeners.push(listener);
+  }
 
   constructor(
     @InjectDb() private readonly db: Database,
@@ -183,6 +210,7 @@ export class RunsService implements OnApplicationShutdown {
       PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
       npm_config_cache: path.join(config.dataDir, ".npm"),
       ...env,
+      ...(input.extraEnv ?? {}),
     };
 
     await this.db.insert(runs).values({
@@ -192,6 +220,7 @@ export class RunsService implements OnApplicationShutdown {
       projectName: input.projectName,
       entryFile: input.record ? "Recording" : input.entryFile,
       trigger: input.trigger ?? "manual",
+      scheduleId: input.scheduleId ?? null,
       status: "running",
     });
 
@@ -221,6 +250,14 @@ export class RunsService implements OnApplicationShutdown {
       steps: [],
       recording: false,
       saveSessionFor: keepSession && projectId ? projectId : null,
+      meta: {
+        projectName: input.projectName,
+        entryFile: input.record ? "Recording" : input.entryFile,
+        scheduleId: input.scheduleId ?? null,
+        trigger: input.trigger ?? "manual",
+        startedAt: new Date(),
+      },
+      waiters: [],
     };
     this.sessions.set(id, session);
 
@@ -432,6 +469,25 @@ export class RunsService implements OnApplicationShutdown {
       .catch((err) => this.logger.error(`Could not save run ${session.id}: ${err.message}`));
     this.emit(session, this.statusEvent(session));
     this.emit(session, { type: "done", data: { status: session.status, error } });
+    const finished: FinishedRun = {
+      runId: session.id,
+      userId: session.userId,
+      projectId: session.projectId,
+      ...session.meta,
+      status: session.status as FinishedRun["status"],
+      error,
+      finishedAt: new Date(),
+      artifactCount: session.artifacts.length,
+      firstErrorLine: session.logs.find((l) => l.level === "error")?.message,
+    };
+    for (const w of session.waiters) w(finished);
+    for (const l of this.finishedListeners) {
+      try {
+        l(finished);
+      } catch (err) {
+        this.logger.warn(`Run finished listener failed: ${(err as Error).message}`);
+      }
+    }
     fs.rmSync(session.workspace, { recursive: true, force: true });
     setTimeout(() => {
       if (session.child.exitCode === null) session.child.kill("SIGKILL");
@@ -464,6 +520,19 @@ export class RunsService implements OnApplicationShutdown {
     }
     s.listeners.add(listener);
     return () => s.listeners.delete(listener);
+  }
+
+  /** Resolves when the run ends, or with null after the timeout. */
+  waitFor(id: string, userId: string, timeoutMs: number): Promise<FinishedRun | null> {
+    const s = this.session(id, userId);
+    if (s.status !== "running") return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), timeoutMs);
+      s.waiters.push((r) => {
+        clearTimeout(t);
+        resolve(r);
+      });
+    });
   }
 
   async stop(id: string, userId: string) {
@@ -523,6 +592,15 @@ export class RunsService implements OnApplicationShutdown {
       logs: live ? live.logs : logsEnc ? decryptJson<LogLine[]>(logsEnc) : [],
       artifacts: await this.artifacts.forRun(id),
     };
+  }
+
+  /** Add a line to a finished run's saved log, e.g. a notification that could not be delivered. */
+  async appendStoredLog(id: string, line: LogLine) {
+    const [row] = await this.db.select({ logsEnc: runs.logsEnc }).from(runs).where(eq(runs.id, id)).limit(1);
+    if (!row) return;
+    const logs = row.logsEnc ? decryptJson<LogLine[]>(row.logsEnc) : [];
+    logs.push(line);
+    await this.db.update(runs).set({ logsEnc: encryptJson(logs) }).where(eq(runs.id, id));
   }
 
   async remove(id: string, userId: string) {

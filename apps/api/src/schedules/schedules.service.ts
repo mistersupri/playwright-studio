@@ -1,10 +1,13 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
+import { Cron } from "croner";
 import { and, desc, eq, lte } from "drizzle-orm";
 import { newId } from "../common/ids.js";
+import { config } from "../config.js";
 import { type Database, InjectDb } from "../database/database.module.js";
 import { projects, type Schedule, schedules } from "../database/schema.js";
+import { NotificationsService } from "../notifications/notifications.service.js";
 import { ProjectsService } from "../projects/projects.service.js";
-import { RUN_OPTION_KEYS, RunsService, type StartRunInput } from "../runs/runs.service.js";
+import { type FinishedRun, RUN_OPTION_KEYS, RunsService, type StartRunInput } from "../runs/runs.service.js";
 
 const INTERVAL_MS: Record<NonNullable<Schedule["interval"]>, number> = {
   "5m": 5 * 60_000,
@@ -15,16 +18,37 @@ const INTERVAL_MS: Record<NonNullable<Schedule["interval"]>, number> = {
   daily: 24 * 60 * 60_000,
 };
 
+/** While a schedule keeps failing, repeat the failure notification at most this often. */
+const FAILURE_REMINDER_MS = 60 * 60_000;
+
 export interface ScheduleInput {
   projectId: string;
   entryFile: string;
   workspaceId?: string | null;
-  type: "once" | "repeat";
+  type: "once" | "repeat" | "cron";
   runAt?: string;
   interval?: Schedule["interval"];
+  cron?: string;
+  timezone?: string;
   viewportWidth: number;
   viewportHeight: number;
   runOptions: Record<string, unknown>;
+  notifyOn: "never" | "failure" | "always";
+  channelIds: string[];
+}
+
+export function cronNext(expr: string, timezone: string | undefined, count = 1, from?: Date): Date[] {
+  try {
+    return new Cron(expr, { timezone: timezone || undefined, paused: true }).nextRuns(count, from);
+  } catch (err) {
+    throw new BadRequestException(`That cron expression is not valid: ${(err as Error).message}`);
+  }
+}
+
+function formatDuration(ms: number) {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 @Injectable()
@@ -37,15 +61,27 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     @InjectDb() private readonly db: Database,
     private readonly projects: ProjectsService,
     private readonly runs: RunsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   onModuleInit() {
     this.timer = setInterval(() => void this.tick(), 30_000);
     setTimeout(() => void this.tick(), 5_000);
+    this.runs.onFinished((r) => void this.afterRun(r));
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
+  }
+
+  private nextRun(s: Pick<Schedule, "type" | "interval" | "cron" | "timezone">, after = new Date()): Date | null {
+    if (s.type === "repeat") return new Date(after.getTime() + INTERVAL_MS[s.interval ?? "daily"]);
+    if (s.type === "cron" && s.cron) return cronNext(s.cron, s.timezone ?? undefined, 1, after)[0] ?? null;
+    return null;
+  }
+
+  preview(cron: string, timezone?: string) {
+    return { next: cronNext(cron, timezone, 3).map((d) => d.toISOString()) };
   }
 
   async list(userId: string) {
@@ -60,8 +96,9 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
 
   async create(userId: string, input: ScheduleInput) {
     await this.projects.owned(input.projectId, userId);
-    const nextRunAt =
-      input.type === "once" ? new Date(input.runAt!) : new Date(Date.now() + INTERVAL_MS[input.interval ?? "daily"]);
+    const base = { type: input.type, interval: input.interval ?? "daily", cron: input.cron ?? null, timezone: input.timezone ?? null } as const;
+    const nextRunAt = input.type === "once" ? new Date(input.runAt!) : this.nextRun(base);
+    if (!nextRunAt) throw new BadRequestException("This schedule would never run.");
     const [row] = await this.db
       .insert(schedules)
       .values({
@@ -73,9 +110,13 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         type: input.type,
         runAt: input.type === "once" ? nextRunAt : null,
         interval: input.type === "repeat" ? (input.interval ?? "daily") : null,
+        cron: input.type === "cron" ? input.cron! : null,
+        timezone: input.timezone ?? null,
         viewportWidth: input.viewportWidth,
         viewportHeight: input.viewportHeight,
         runOptions: input.runOptions,
+        notifyOn: input.notifyOn,
+        channelIds: input.channelIds,
         nextRunAt,
       })
       .returning();
@@ -89,11 +130,16 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     return row;
   }
 
-  async setStatus(userId: string, id: string, status: "active" | "paused") {
+  async update(userId: string, id: string, input: { status?: "active" | "paused"; notifyOn?: ScheduleInput["notifyOn"]; channelIds?: string[] }) {
     const row = await this.owned(userId, id);
-    const nextRunAt =
-      status === "active" && row.type === "repeat" ? new Date(Date.now() + INTERVAL_MS[row.interval ?? "daily"]) : row.nextRunAt;
-    const [updated] = await this.db.update(schedules).set({ status, nextRunAt }).where(eq(schedules.id, id)).returning();
+    const patch: Partial<typeof schedules.$inferInsert> = {};
+    if (input.status) {
+      patch.status = input.status;
+      if (input.status === "active" && row.type !== "once") patch.nextRunAt = this.nextRun(row);
+    }
+    if (input.notifyOn) patch.notifyOn = input.notifyOn;
+    if (input.channelIds) patch.channelIds = input.channelIds;
+    const [updated] = await this.db.update(schedules).set(patch).where(eq(schedules.id, id)).returning();
     return updated;
   }
 
@@ -136,6 +182,7 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         workspaceId: s.workspaceId,
         viewport: { width: s.viewportWidth, height: s.viewportHeight },
         trigger: "schedule",
+        scheduleId: s.id,
       });
     } catch (err) {
       // Most likely the concurrency limit; the next tick tries again.
@@ -145,11 +192,45 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     await this.db
       .update(schedules)
-      .set(
-        s.type === "once"
-          ? { lastRunAt: now, status: "completed", nextRunAt: null }
-          : { lastRunAt: now, nextRunAt: new Date(now.getTime() + INTERVAL_MS[s.interval ?? "daily"]) },
-      )
+      .set(s.type === "once" ? { lastRunAt: now, status: "completed", nextRunAt: null } : { lastRunAt: now, nextRunAt: this.nextRun(s, now) })
       .where(eq(schedules.id, s.id));
+  }
+
+  /** Decide whether a finished scheduled run should notify, then send. */
+  private async afterRun(r: FinishedRun) {
+    if (!r.scheduleId) return;
+    const [s] = await this.db.select().from(schedules).where(eq(schedules.id, r.scheduleId)).limit(1);
+    if (!s) return;
+    const failed = r.status !== "success";
+    let send = false;
+    if (s.notifyOn === "always") send = true;
+    else if (s.notifyOn === "failure" && failed) {
+      const wasFailing = s.lastStatus && s.lastStatus !== "success";
+      const recentlyNotified = s.lastNotifiedAt && Date.now() - s.lastNotifiedAt.getTime() < FAILURE_REMINDER_MS;
+      send = !wasFailing || !recentlyNotified;
+    }
+    await this.db
+      .update(schedules)
+      .set({ lastStatus: r.status, ...(send ? { lastNotifiedAt: new Date() } : {}) })
+      .where(eq(schedules.id, s.id));
+    if (!send || s.channelIds.length === 0) return;
+
+    const failures = await this.notifications.sendToChannels(s.userId, s.channelIds, {
+      title: `${failed ? "Failed" : "Passed"}: ${r.projectName}`,
+      status: r.status,
+      projectName: r.projectName,
+      entryFile: r.entryFile,
+      duration: formatDuration(r.finishedAt.getTime() - r.startedAt.getTime()),
+      error: r.error ?? (failed ? r.firstErrorLine : undefined),
+      artifactCount: r.artifactCount,
+      link: config.appUrl && r.projectId ? `${config.appUrl}/?project=${r.projectId}` : undefined,
+      payload: {
+        event: "run.finished",
+        run: { id: r.runId, status: r.status, error: r.error ?? null, startedAt: r.startedAt, finishedAt: r.finishedAt, artifacts: r.artifactCount },
+        project: { id: r.projectId, name: r.projectName, entryFile: r.entryFile },
+        schedule: { id: s.id },
+      },
+    });
+    for (const f of failures) await this.runs.appendStoredLog(r.runId, { source: "system", level: "warning", message: `Notification failed: ${f}`, at: new Date().toISOString() });
   }
 }

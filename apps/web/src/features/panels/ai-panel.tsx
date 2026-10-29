@@ -11,7 +11,7 @@ import { useCollab } from "@/hooks/use-collab";
 import { api, errorMessage } from "@/lib/api";
 import type { AiSettings } from "@/lib/types";
 import { useWorkbench } from "@/stores/workbench";
-import { AiSettingsDialog } from "./ai-settings-dialog";
+import { useSettingsDialog } from "@/features/settings/settings-store";
 import { PanelHeader } from "./panel-header";
 
 type Mode = "replace" | "append" | "prepend";
@@ -22,7 +22,7 @@ export function AiPanel() {
   const collab = useCollab();
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<Mode>("replace");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const showSettings = useSettingsDialog((s) => s.show);
   const [result, setResult] = useState<{ code: string; explanation: string; file: string; mode: Mode } | null>(null);
 
   const configured = settings.data?.hasKey || settings.data?.serverKey;
@@ -62,7 +62,7 @@ export function AiPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PanelHeader title="Write with Gemini">
-        <Button variant="ghost" size="icon-xs" aria-label="Gemini settings" onClick={() => setSettingsOpen(true)}>
+        <Button variant="ghost" size="icon-xs" aria-label="Gemini settings" onClick={() => showSettings("gemini")}>
           <Settings2 />
         </Button>
       </PanelHeader>
@@ -71,7 +71,7 @@ export function AiPanel() {
         {settings.isSuccess && !configured && (
           <div className="mb-3 rounded-md border p-2.5 text-xs">
             <p>Add a Gemini API key to generate scripts.</p>
-            <Button size="xs" variant="outline" className="mt-2" onClick={() => setSettingsOpen(true)}>
+            <Button size="xs" variant="outline" className="mt-2" onClick={() => showSettings("gemini")}>
               Add API key
             </Button>
           </div>
@@ -118,7 +118,6 @@ export function AiPanel() {
           </section>
         )}
       </div>
-      <AiSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

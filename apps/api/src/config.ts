@@ -29,6 +29,8 @@ const schema = z.object({
   MAX_CONCURRENT_RUNS: z.coerce.number().int().positive().default(3),
   MAX_RUN_SECONDS: z.coerce.number().int().positive().default(600),
   WEB_DIST: z.string().optional(),
+  SMTP_URL: z.string().optional(),
+  SMTP_FROM: z.string().optional(),
 });
 
 function emptyToUndefined(env: NodeJS.ProcessEnv) {
@@ -98,6 +100,7 @@ function loadConfig() {
     admin: env.ADMIN_EMAIL && env.ADMIN_PASSWORD ? { email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD } : null,
     maxConcurrentRuns: env.MAX_CONCURRENT_RUNS,
     maxRunSeconds: env.MAX_RUN_SECONDS,
+    smtp: env.SMTP_URL ? { url: env.SMTP_URL, from: env.SMTP_FROM ?? "ScriptBench <no-reply@localhost>" } : null,
     webDist: path.resolve(env.WEB_DIST ?? path.join(REPO_ROOT, "apps", "web", "dist")),
     paths: {
       artifacts: path.join(dataDir, "artifacts"),

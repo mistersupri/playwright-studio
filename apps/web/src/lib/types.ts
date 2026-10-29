@@ -98,7 +98,7 @@ export interface RunSummary {
   projectId: string | null;
   projectName: string;
   entryFile: string;
-  trigger: "manual" | "schedule";
+  trigger: "manual" | "schedule" | "api";
   status: RunStatus;
   error: string | null;
   createdAt: string;
@@ -130,8 +130,13 @@ export interface Schedule {
   projectName: string;
   entryFile: string;
   workspaceId: string | null;
-  type: "once" | "repeat";
+  type: "once" | "repeat" | "cron";
   runAt: string | null;
+  cron: string | null;
+  timezone: string | null;
+  notifyOn: "never" | "failure" | "always";
+  channelIds: string[];
+  lastStatus: string | null;
   interval: "5m" | "15m" | "30m" | "1h" | "12h" | "daily" | null;
   status: "active" | "paused" | "completed";
   viewportWidth: number;
@@ -169,4 +174,20 @@ export interface Inspected {
   box: { x: number; y: number; width: number; height: number } | null;
   locator: string | null;
   tag: string | null;
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: "webhook" | "slack" | "telegram" | "email";
+  target: string;
+  createdAt: string;
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string;
+  lastUsedAt: string | null;
+  createdAt: string;
 }

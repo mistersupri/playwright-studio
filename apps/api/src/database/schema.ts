@@ -59,7 +59,8 @@ export const runs = pgTable(
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     projectName: text("project_name").notNull(),
     entryFile: text("entry_file").notNull().default("main.js"),
-    trigger: text("trigger", { enum: ["manual", "schedule"] }).notNull().default("manual"),
+    trigger: text("trigger", { enum: ["manual", "schedule", "api"] }).notNull().default("manual"),
+    scheduleId: text("schedule_id"),
     status: text("status", { enum: ["running", "success", "failed", "stopped"] }).notNull(),
     error: text("error"),
     logsEnc: text("logs_enc"),
@@ -131,8 +132,14 @@ export const schedules = pgTable(
       .references(() => projects.id, { onDelete: "cascade" }),
     entryFile: text("entry_file").notNull().default("main.js"),
     workspaceId: text("workspace_id").references(() => envWorkspaces.id, { onDelete: "set null" }),
-    type: text("type", { enum: ["once", "repeat"] }).notNull(),
+    type: text("type", { enum: ["once", "repeat", "cron"] }).notNull(),
     runAt: timestamp("run_at", { withTimezone: true }),
+    cron: text("cron"),
+    timezone: text("timezone"),
+    notifyOn: text("notify_on", { enum: ["never", "failure", "always"] }).notNull().default("never"),
+    channelIds: jsonb("channel_ids").$type<string[]>().notNull().default([]),
+    lastStatus: text("last_status"),
+    lastNotifiedAt: timestamp("last_notified_at", { withTimezone: true }),
     interval: text("interval", { enum: ["5m", "15m", "30m", "1h", "12h", "daily"] }),
     status: text("status", { enum: ["active", "paused", "completed"] }).notNull().default("active"),
     viewportWidth: integer("viewport_width").notNull().default(1280),
@@ -160,6 +167,38 @@ export const browserSessions = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
+);
+
+export const notificationChannels = pgTable(
+  "notification_channels",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    type: text("type", { enum: ["webhook", "slack", "telegram", "email"] }).notNull(),
+    /** Encrypted JSON: { url } | { botToken, chatId } | { to }. */
+    configEnc: text("config_enc").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("notification_channels_user_idx").on(t.userId)],
+);
+
+/** Personal access tokens: only a SHA-256 of the secret part is stored. */
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    secretHash: text("secret_hash").notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("api_tokens_user_idx").on(t.userId)],
 );
 
 export const userSettings = pgTable("user_settings", {

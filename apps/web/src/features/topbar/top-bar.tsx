@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown, Copy, Download, History, KeyRound, Lock, LogOut, Moon, Pencil, Play, Save, Share2, Square, Sun, Trash2,
+  ChevronDown, Copy, Download, History, Lock, LogOut, Moon, Pencil, Play, Save, Settings, Share2, Square, Sun, Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
@@ -17,7 +17,7 @@ import {
 import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AiSettingsDialog } from "@/features/panels/ai-settings-dialog";
+import { useSettingsDialog } from "@/features/settings/settings-store";
 import { useMe, useSignOut } from "@/hooks/use-auth";
 import { useCollab } from "@/hooks/use-collab";
 import { useDuplicateProject, useIsOwner, useSaveProject } from "@/hooks/use-project";
@@ -63,7 +63,8 @@ export function TopBar() {
   const navigate = useNavigate();
 
   const [switcher, setSwitcher] = useState(false);
-  const [dialog, setDialog] = useState<"rename" | "versions" | "share" | "delete" | "ai" | null>(null);
+  const showSettings = useSettingsDialog((s) => s.show);
+  const [dialog, setDialog] = useState<"rename" | "versions" | "share" | "delete" | null>(null);
 
   const remove = useMutation({
     mutationFn: () => api.delete(`/projects/${project!.id}`),
@@ -254,8 +255,8 @@ export function TopBar() {
               <span className="block truncate text-xs text-muted-foreground">{me.data?.email}</span>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setDialog("ai")}>
-              <KeyRound /> Gemini settings
+            <DropdownMenuItem onSelect={() => showSettings()}>
+              <Settings /> Settings
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={signOut}>
               <LogOut /> Sign out
@@ -280,7 +281,6 @@ export function TopBar() {
       />
       <VersionsDialog open={dialog === "versions"} onOpenChange={(o) => !o && setDialog(null)} />
       <ShareDialog open={dialog === "share"} onOpenChange={(o) => !o && setDialog(null)} />
-      <AiSettingsDialog open={dialog === "ai"} onOpenChange={(o) => !o && setDialog(null)} />
       <ConfirmDialog
         open={dialog === "delete"}
         onOpenChange={(o) => !o && setDialog(null)}

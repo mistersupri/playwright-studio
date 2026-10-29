@@ -22,6 +22,7 @@ import { RecorderPanel } from "@/features/panels/recorder-panel";
 import { SchedulesPanel } from "@/features/panels/schedules-panel";
 import { SearchPanel } from "@/features/panels/search-panel";
 import { VariablesPanel } from "@/features/panels/variables-panel";
+import { SettingsDialog } from "@/features/settings/settings-dialog";
 import { ChoiceDialog } from "@/features/topbar/choice-dialog";
 import { TopBar } from "@/features/topbar/top-bar";
 import { useCollabRoom } from "@/hooks/use-collab";
@@ -140,6 +141,7 @@ export function WorkbenchPage() {
       <TopBar />
       <Layout />
       <ChoiceDialog />
+      <SettingsDialog />
     </div>
   );
 }

@@ -60,6 +60,7 @@ Back up both volumes, and keep `ENCRYPTION_KEY` safe: scripts, variables, API ke
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | no | Creates that account on start if it does not exist |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | no | Enables "Continue with Google"; redirect URI is `<APP_URL>/api/auth/google/callback` |
 | `GEMINI_API_KEY` | no | Server-wide key for script generation and CAPTCHA reading; people can add their own |
+| `SMTP_URL`, `SMTP_FROM` | no | Enables email notifications, e.g. `smtps://user:pass@smtp.example.com` |
 | `MAX_CONCURRENT_RUNS` | no | Runs allowed at once (default 3) |
 | `MAX_RUN_SECONDS` | no | Upper bound for a run's time limit (default 600) |
 | `DATA_DIR` | no | Where outputs, uploads and installed packages go (`/data` in the image) |
@@ -72,7 +73,12 @@ Back up both volumes, and keep `ENCRYPTION_KEY` safe: scripts, variables, API ke
 4. The API streams those to the browser with server-sent events (`GET /api/runs/<id>/events`) and moves new files from the run folder into encrypted storage as they appear.
 5. When the run ends, its log is saved to the run history and the folder is deleted.
 
-Schedules use the same path with the project's last saved version.
+Schedules and the [HTTP API](docs/API.md) use the same path with the project's last saved version.
+
+## Documentation
+
+- [docs/PRD.md](docs/PRD.md): product requirements and the status of each planned feature
+- [docs/API.md](docs/API.md): API tokens, endpoints for CI and other systems, webhook payloads
 
 **Scripts are code execution.** Anyone who can sign in can run arbitrary Node.js on the server, inside the app container. Treat accounts as trusted, keep `ALLOW_REGISTRATION=false` on shared servers, and run the container on a host where that is acceptable.
 

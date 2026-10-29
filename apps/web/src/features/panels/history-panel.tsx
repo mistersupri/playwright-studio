@@ -62,7 +62,7 @@ export function HistoryPanel() {
                   <span className="mt-0.5 flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
                     <span className="truncate font-mono">{r.entryFile}</span>
                     <span className="shrink-0 tabular">
-                      {r.trigger === "schedule" ? "scheduled · " : ""}
+                      {r.trigger === "schedule" ? "scheduled · " : r.trigger === "api" ? "API · " : ""}
                       {formatDuration(r.createdAt, r.finishedAt)}
                     </span>
                   </span>

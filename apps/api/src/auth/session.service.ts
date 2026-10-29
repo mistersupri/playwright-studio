@@ -1,13 +1,19 @@
 import { Injectable } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Request, Response } from "express";
 import { config } from "../config.js";
 import { type Database, InjectDb } from "../database/database.module.js";
-import { users } from "../database/schema.js";
+import { apiTokens, users } from "../database/schema.js";
 import type { SessionUser } from "./auth.decorators.js";
 
 export const SESSION_COOKIE = "sb_session";
+export const API_TOKEN_PREFIX = "sbt_";
+
+export function hashSecret(secret: string) {
+  return createHash("sha256").update(secret).digest("hex");
+}
 const SESSION_DAYS = 14;
 
 @Injectable()
@@ -44,6 +50,7 @@ export class SessionService {
 
   async resolve(token: string | undefined): Promise<SessionUser | null> {
     if (!token) return null;
+    if (token.startsWith(API_TOKEN_PREFIX)) return this.resolveApiToken(token);
     try {
       const { sub } = this.jwt.verify<{ sub: string }>(token);
       const [user] = await this.db.select().from(users).where(eq(users.id, sub)).limit(1);
@@ -52,5 +59,27 @@ export class SessionService {
     } catch {
       return null;
     }
+  }
+
+  /** Tokens look like sbt_<id>_<secret>; only a hash of the secret is stored. */
+  private async resolveApiToken(token: string): Promise<SessionUser | null> {
+    const [, id, secret] = token.match(/^sbt_([a-z0-9]+)_([A-Za-z0-9_-]+)$/) ?? [];
+    if (!id || !secret) return null;
+    const [row] = await this.db
+      .select({ token: apiTokens, user: users })
+      .from(apiTokens)
+      .innerJoin(users, eq(users.id, apiTokens.userId))
+      .where(eq(apiTokens.id, id))
+      .limit(1);
+    if (!row) return null;
+    const expected = Buffer.from(row.token.secretHash, "hex");
+    const actual = Buffer.from(hashSecret(secret), "hex");
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+    // Avoid a write on every request; minute precision is enough for "last used".
+    if (!row.token.lastUsedAt || Date.now() - row.token.lastUsedAt.getTime() > 60_000) {
+      await this.db.update(apiTokens).set({ lastUsedAt: new Date() }).where(eq(apiTokens.id, id));
+    }
+    const u = row.user;
+    return { id: u.id, email: u.email, name: u.name, avatarUrl: u.avatarUrl };
   }
 }

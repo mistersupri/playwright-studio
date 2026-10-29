@@ -221,9 +221,9 @@ ScriptBench sudah bisa menulis, menjalankan dan mengamati script Playwright di b
 | F8 | Run berbasis data | 2 | Selesai |
 | F12 | Bandingkan screenshot | 2 | Selesai |
 | F13 | Folder output | 2 | Selesai |
-| F5 | Cron dan zona waktu | 3 | Direncanakan |
-| F4 | Notifikasi | 3 | Direncanakan |
-| F6 | Pemicu lewat API | 3 | Direncanakan |
+| F5 | Cron dan zona waktu | 3 | Selesai |
+| F4 | Notifikasi | 3 | Selesai |
+| F6 | Pemicu lewat API | 3 | Selesai |
 | F16 | Antrean, retensi, kuota | 4 | Direncanakan |
 | F15 | Keamanan akun dan tim | 4 | Direncanakan |
 | F14 | Test dan CI | 4 | Direncanakan |
