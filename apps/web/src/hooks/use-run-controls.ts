@@ -99,6 +99,7 @@ export function useRunControls() {
     click: (x: number, y: number) => call("input", { type: "click", x, y }),
     type: (text: string) => call("input", { type: "type", text }),
     key: (key: string) => call("input", { type: "key", key }),
+    wheel: (x: number, y: number, deltaX: number, deltaY: number) => call("input", { type: "wheel", x, y, deltaX, deltaY }),
     choose: (indexes: number[]) => call("choice", { indexes }),
   };
 }

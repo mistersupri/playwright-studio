@@ -103,6 +103,13 @@ export class RunsController {
         z.object({ type: z.literal("click"), x: z.number().min(0).max(4000), y: z.number().min(0).max(4000) }),
         z.object({ type: z.literal("type"), text: z.string().min(1).max(2000) }),
         z.object({ type: z.literal("key"), key: z.string().min(1).max(40) }),
+        z.object({
+          type: z.literal("wheel"),
+          x: z.number().min(0).max(4000),
+          y: z.number().min(0).max(4000),
+          deltaX: z.number().min(-5000).max(5000),
+          deltaY: z.number().min(-5000).max(5000),
+        }),
       ]),
       body,
     );

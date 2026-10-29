@@ -453,11 +453,13 @@ process.on("message", async (raw: ParentMessage) => {
       break;
     case "type":
       await page?.keyboard.type(raw.text).catch(() => {});
-      system(`Typed ${raw.text.length} character(s).`);
       break;
     case "key":
       await page?.keyboard.press(raw.key).catch(() => {});
-      system(`Pressed ${raw.key}.`);
+      break;
+    case "wheel":
+      await page?.mouse.move(raw.x, raw.y).catch(() => {});
+      await page?.mouse.wheel(raw.deltaX, raw.deltaY).catch(() => {});
       break;
   }
 });

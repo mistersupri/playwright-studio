@@ -27,7 +27,8 @@ export type ParentMessage =
   | { type: "choice"; indexes: number[] }
   | { type: "click"; x: number; y: number }
   | { type: "type"; text: string }
-  | { type: "key"; key: string };
+  | { type: "key"; key: string }
+  | { type: "wheel"; x: number; y: number; deltaX: number; deltaY: number };
 
 export type LogSource = "script" | "browser" | "system";
 export type LogLevel = "log" | "info" | "success" | "warning" | "error";
