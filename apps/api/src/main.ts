@@ -31,6 +31,8 @@ async function bootstrap() {
           frameSrc: ["'self'"],
           objectSrc: ["'self'"],
           mediaSrc: ["'self'", "blob:"],
+          // Self-hosted installs are often reached over plain HTTP on a LAN address.
+          upgradeInsecureRequests: null,
         },
       },
       crossOriginEmbedderPolicy: false,

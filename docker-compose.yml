@@ -1,0 +1,53 @@
+# Production stack: the app and PostgreSQL.
+#   cp .env.example .env    # then fill in the three secrets
+#   docker compose up -d --build
+name: scriptbench
+
+services:
+  app:
+    build: .
+    image: scriptbench:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://scriptbench:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/scriptbench
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env (openssl rand -hex 32)}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+      APP_URL: ${APP_URL:-}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-3}
+      MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-600}
+    volumes:
+      - app-data:/data
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scriptbench
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: scriptbench
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scriptbench -d scriptbench"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  app-data:
+  postgres-data:
