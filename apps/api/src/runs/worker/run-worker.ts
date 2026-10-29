@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { type Browser, type BrowserContext, type BrowserContextOptions, chromium, type Page } from "playwright";
+import { type Browser, type BrowserContext, type BrowserContextOptions, chromium, devices, firefox, type Page, webkit } from "playwright";
 import { binarizeImage, type CaptchaSolveOptions, solveCaptcha, solveCaptchaFromBuffer } from "./captcha-solver.js";
 import { describe } from "./locator.js";
 import { importsToRequires } from "./transform.js";
@@ -310,6 +310,14 @@ async function sendCookies() {
 async function teardown() {
   if (previewTimer) clearInterval(previewTimer);
   await sendCookies();
+  if (opts?.trace && context) {
+    try {
+      await context.tracing.stop({ path: path.join(process.cwd(), `trace-${opts.runId}.zip`) });
+      system("Trace saved. Open it from Files.", "success");
+    } catch (err) {
+      system(`Could not save the trace: ${(err as Error).message}`, "warning");
+    }
+  }
   if (opts?.saveSession && context) {
     try {
       send({ type: "session", state: await context.storageState() });
@@ -347,14 +355,34 @@ async function finish(status: "success" | "failed" | "stopped", error?: string) 
 
 async function run(start: WorkerStart) {
   opts = start;
-  const launchArgs = ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"];
-  system("Launching Chromium.");
-  browser = await chromium.launch({ headless: true, args: launchArgs, slowMo: opts.debug ? 600 : undefined });
+  const engine = { chromium, firefox, webkit }[opts.browser] ?? chromium;
+  const isChromium = engine === chromium;
+  // Sandbox flags are Chromium-only; Firefox and WebKit reject unknown switches.
+  const launchArgs = isChromium ? ["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"] : [];
+  const proxy = parseProxy(opts.proxy);
+  system(`Launching ${engine.name()}${proxy ? ` through proxy ${proxy.server}` : ""}.`);
+  browser = await engine.launch({ headless: true, args: launchArgs, slowMo: opts.debug ? 600 : undefined, proxy });
+
+  let device: BrowserContextOptions = {};
+  if (opts.device) {
+    const preset = devices[opts.device];
+    if (!preset) system(`Unknown device "${opts.device}", using the viewport instead.`, "warning");
+    else {
+      const { defaultBrowserType: _ignored, ...rest } = preset;
+      device = rest;
+      // Firefox has no mobile emulation mode.
+      if (engine === firefox) delete device.isMobile;
+      system(`Emulating ${opts.device} (${rest.viewport.width}×${rest.viewport.height}).`);
+    }
+  }
+  const stealth = opts.stealth && isChromium;
+  if (opts.stealth && !isChromium) system("Stealth mode only applies to Chromium; skipping it.", "warning");
 
   context = await browser.newContext({
     viewport: opts.viewport,
     deviceScaleFactor: 1,
-    ...(opts.stealth
+    ...device,
+    ...(stealth
       ? {
           userAgent:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -363,12 +391,16 @@ async function run(start: WorkerStart) {
           extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
         }
       : {}),
-    ...(opts.recordVideo ? { recordVideo: { dir: path.join(process.cwd(), ".video"), size: opts.viewport } } : {}),
+    ...(opts.locale ? { locale: opts.locale } : {}),
+    ...(opts.timezoneId ? { timezoneId: opts.timezoneId } : {}),
+    ...(opts.geolocation ? { geolocation: opts.geolocation, permissions: ["geolocation"] } : {}),
+    ...(opts.recordVideo ? { recordVideo: { dir: path.join(process.cwd(), ".video"), size: device.viewport ?? opts.viewport } } : {}),
     ...(opts.storageState ? { storageState: opts.storageState as BrowserContextOptions["storageState"] } : {}),
   });
   if (opts.storageState) system("Restored the saved browser session (cookies and local storage).");
+  if (opts.trace) await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 
-  if (opts.stealth) {
+  if (stealth) {
     system("Stealth mode: masking automation fingerprints.");
     await context.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -416,21 +448,64 @@ async function run(start: WorkerStart) {
   const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => (...a: unknown[]) => Promise<unknown>;
   const fn = new AsyncFunction(
     "browser", "context", "page", "console", "require", "chromium", "pause", "__breakpoint",
-    "solveCaptcha", "solveCaptchaFromImage", "chooseElements", "__filename", "__dirname",
+    "solveCaptcha", "solveCaptchaFromImage", "chooseElements", "__filename", "__dirname", "row", "rowIndex", "data",
     instrument(opts.entryCode),
   );
+  const req = buildRequire();
+  const runOnce = (row?: Record<string, string>, rowIndex?: number) =>
+    fn(
+      browser, context, safePage, scriptConsole, req, engine, userPause, breakpoint,
+      (sel: string, o?: CaptchaSolveOptions) => captchaFromSelector(page!, sel, o),
+      (src: Buffer | string, o?: CaptchaSolveOptions) => captchaFromImage(src, o),
+      (sel: string) => chooseElements(page!, sel),
+      path.join(process.cwd(), opts.entryFile),
+      process.cwd(),
+      row,
+      rowIndex,
+      opts.dataRows ?? [],
+    );
 
-  system(`Running ${opts.entryFile}.`);
-  const result = await fn(
-    browser, context, safePage, scriptConsole, buildRequire(), chromium, userPause, breakpoint,
-    (sel: string, o?: CaptchaSolveOptions) => captchaFromSelector(page!, sel, o),
-    (src: Buffer | string, o?: CaptchaSolveOptions) => captchaFromImage(src, o),
-    (sel: string) => chooseElements(page!, sel),
-    path.join(process.cwd(), opts.entryFile),
-    process.cwd(),
-  );
-  if (result !== undefined) log("script", "info", `Returned ${format([result])}`);
-  system("Script finished.", "success");
+  if (!opts.dataRows) {
+    system(`Running ${opts.entryFile}.`);
+    const result = await runOnce();
+    if (result !== undefined) log("script", "info", `Returned ${format([result])}`);
+    system("Script finished.", "success");
+    return;
+  }
+
+  const rows = opts.dataRows;
+  system(`Running ${opts.entryFile} once for each of ${rows.length} rows.`);
+  const failed: number[] = [];
+  for (const [i, row] of rows.entries()) {
+    system(`Row ${i + 1}/${rows.length}`);
+    try {
+      const result = await runOnce(row, i);
+      if (result !== undefined) log("script", "info", `Row ${i + 1} returned ${format([result])}`);
+    } catch (err) {
+      failed.push(i + 1);
+      system(`Row ${i + 1} failed: ${(err as Error).message ?? err}`, "error");
+      if (opts.stopOnError) throw new Error(`Stopped at row ${i + 1} of ${rows.length}: ${(err as Error).message ?? err}`);
+    }
+  }
+  if (failed.length) {
+    throw new Error(`${failed.length} of ${rows.length} rows failed (rows ${failed.slice(0, 20).join(", ")}${failed.length > 20 ? ", …" : ""}).`);
+  }
+  system(`All ${rows.length} rows passed.`, "success");
+}
+
+function parseProxy(raw?: string) {
+  if (!raw) return undefined;
+  try {
+    const u = new URL(raw.includes("://") ? raw : `http://${raw}`);
+    return {
+      server: `${u.protocol}//${u.host}`,
+      username: u.username ? decodeURIComponent(u.username) : undefined,
+      password: u.password ? decodeURIComponent(u.password) : undefined,
+    };
+  } catch {
+    system(`Proxy "${raw}" is not a valid URL; running without it.`, "warning");
+    return undefined;
+  }
 }
 
 function setRecording(on: boolean) {

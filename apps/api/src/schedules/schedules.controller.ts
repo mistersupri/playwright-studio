@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from "@ne
 import { z } from "zod";
 import { CurrentUser, type SessionUser } from "../auth/auth.decorators.js";
 import { parse } from "../common/validation.js";
+import { runOptionsShape } from "../runs/runs.controller.js";
 import { SchedulesService } from "./schedules.service.js";
 
 const createSchema = z
@@ -14,6 +15,17 @@ const createSchema = z
     interval: z.enum(["5m", "15m", "30m", "1h", "12h", "daily"]).optional(),
     viewportWidth: z.number().int().min(240).max(3840).default(1280),
     viewportHeight: z.number().int().min(240).max(2160).default(720),
+    runOptions: z
+      .object({
+        ...runOptionsShape,
+        stealth: z.boolean().optional(),
+        binarizeCaptcha: z.boolean().optional(),
+        useGeminiCaptcha: z.boolean().optional(),
+        recordVideo: z.boolean().optional(),
+        timeoutSeconds: z.number().int().min(5).max(3600).optional(),
+      })
+      .optional()
+      .transform((v) => v ?? {}),
   })
   .refine((v) => v.type === "repeat" || (v.runAt && new Date(v.runAt).getTime() > Date.now()), {
     message: "Pick a time in the future.",

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { isActive, useRun } from "@/stores/run";
-import { useWorkbench } from "@/stores/workbench";
+import { runOptions, useWorkbench } from "@/stores/workbench";
 
 const EVENTS = ["status", "log", "preview", "network", "cookies", "choice", "artifact", "url", "step", "recording", "inspected", "done"] as const;
 
@@ -61,12 +61,8 @@ export function useRunControls() {
           files: wb.files,
           entryFile: file,
           workspaceId: s.workspaceId,
-          timeoutSeconds: s.timeoutSeconds,
           viewport: s.viewport,
-          stealth: s.stealth,
-          binarizeCaptcha: s.binarizeCaptcha,
-          useGeminiCaptcha: s.useGeminiCaptcha,
-          recordVideo: s.recordVideo,
+          ...runOptions(s, wb.project?.id),
           debug: s.debug,
           breakpoints: s.debug ? (wb.breakpoints[`${wb.project?.id ?? ""}/${file}`] ?? []) : [],
           record,

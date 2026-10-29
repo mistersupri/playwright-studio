@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { chromium } from "playwright";
+import { chromium, devices, firefox, webkit } from "playwright";
 import { z } from "zod";
 import { Public } from "../auth/auth.decorators.js";
 import { parse } from "../common/validation.js";
@@ -54,13 +54,29 @@ export class SystemController {
       executablePath = chromium.executablePath();
     } catch {}
     const browserInstalled = Boolean(executablePath && fs.existsSync(executablePath));
+    const installed = (t: typeof chromium) => {
+      try {
+        return fs.existsSync(t.executablePath());
+      } catch {
+        return false;
+      }
+    };
     return {
       browserInstalled,
+      browsers: { chromium: installed(chromium), firefox: installed(firefox), webkit: installed(webkit) },
       executablePath,
       platform: process.platform,
       node: process.version,
       database: config.databaseUrl ? "postgres" : "pglite",
     };
+  }
+
+  /** Playwright's device presets, without the landscape duplicates. */
+  @Get("devices")
+  devices() {
+    return Object.entries(devices)
+      .filter(([name]) => !name.endsWith(" landscape"))
+      .map(([name, d]) => ({ name, width: d.viewport.width, height: d.viewport.height, mobile: d.isMobile }));
   }
 
   @Get("packages")

@@ -34,6 +34,7 @@ export default defineConfig({
     proxy: {
       "/api": { target: api, changeOrigin: false },
       "/ws": { target: api.replace(/^http/, "ws"), ws: true },
+      "/trace-viewer": { target: api },
     },
   },
   build: {

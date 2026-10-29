@@ -4,7 +4,7 @@ import { newId } from "../common/ids.js";
 import { type Database, InjectDb } from "../database/database.module.js";
 import { projects, type Schedule, schedules } from "../database/schema.js";
 import { ProjectsService } from "../projects/projects.service.js";
-import { RunsService } from "../runs/runs.service.js";
+import { RUN_OPTION_KEYS, RunsService, type StartRunInput } from "../runs/runs.service.js";
 
 const INTERVAL_MS: Record<NonNullable<Schedule["interval"]>, number> = {
   "5m": 5 * 60_000,
@@ -24,6 +24,7 @@ export interface ScheduleInput {
   interval?: Schedule["interval"];
   viewportWidth: number;
   viewportHeight: number;
+  runOptions: Record<string, unknown>;
 }
 
 @Injectable()
@@ -74,6 +75,7 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         interval: input.type === "repeat" ? (input.interval ?? "daily") : null,
         viewportWidth: input.viewportWidth,
         viewportHeight: input.viewportHeight,
+        runOptions: input.runOptions,
         nextRunAt,
       })
       .returning();
@@ -119,8 +121,13 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
   private async fire(s: Schedule) {
     const project = await this.projects.findRaw(s.projectId);
     const files = this.projects.files(project);
+    const options = Object.fromEntries(
+      Object.entries(s.runOptions ?? {}).filter(([k]) => (RUN_OPTION_KEYS as readonly string[]).includes(k)),
+    ) as Partial<StartRunInput>;
     try {
       await this.runs.start({
+        timeoutSeconds: 600,
+        ...options,
         userId: s.userId,
         projectId: project.id,
         projectName: project.name,
@@ -128,7 +135,6 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         entryFile: files.some((f) => f.name === s.entryFile) ? s.entryFile : files[0].name,
         workspaceId: s.workspaceId,
         viewport: { width: s.viewportWidth, height: s.viewportHeight },
-        timeoutSeconds: 600,
         trigger: "schedule",
       });
     } catch (err) {

@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 
@@ -78,8 +78,10 @@ export const artifacts = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
     runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
-    kind: text("kind", { enum: ["screenshot", "pdf", "excel", "video", "upload", "file"] }).notNull(),
+    kind: text("kind", { enum: ["screenshot", "pdf", "excel", "video", "trace", "upload", "file"] }).notNull(),
     name: text("name").notNull(),
+    /** Optional grouping in the Files tab; set from the script's subfolder or by the user. */
+    folder: text("folder"),
     mimeType: text("mime_type").notNull(),
     size: integer("size").notNull(),
     /** Relative to the data dir. Outputs are encrypted at rest; uploads stay plain so scripts can read them. */
@@ -135,6 +137,8 @@ export const schedules = pgTable(
     status: text("status", { enum: ["active", "paused", "completed"] }).notNull().default("active"),
     viewportWidth: integer("viewport_width").notNull().default(1280),
     viewportHeight: integer("viewport_height").notNull().default(720),
+    /** Browser, device, proxy and other run settings captured when the schedule was made. */
+    runOptions: jsonb("run_options").$type<Record<string, unknown>>().notNull().default({}),
     lastRunAt: timestamp("last_run_at", { withTimezone: true }),
     nextRunAt: timestamp("next_run_at", { withTimezone: true }),
     createdAt: createdAt(),

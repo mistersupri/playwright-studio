@@ -49,7 +49,23 @@ export interface StartRunInput {
   trigger?: "manual" | "schedule";
   /** Open a page for recording instead of running the entry file. */
   record?: { url: string };
+  browser?: "chromium" | "firefox" | "webkit";
+  device?: string;
+  locale?: string;
+  timezoneId?: string;
+  geolocation?: { latitude: number; longitude: number };
+  proxy?: string;
+  trace?: boolean;
+  /** Uploaded CSV/XLSX whose rows drive a data run. */
+  dataArtifactId?: string | null;
+  stopOnError?: boolean;
 }
+
+/** The run options a schedule stores and replays. */
+export const RUN_OPTION_KEYS = [
+  "stealth", "binarizeCaptcha", "useGeminiCaptcha", "recordVideo", "browser", "device", "locale",
+  "timezoneId", "geolocation", "proxy", "trace", "dataArtifactId", "stopOnError", "timeoutSeconds",
+] as const;
 
 type RunEvent =
   | { type: "status"; data: { status: RunStatus; paused: boolean; line?: number } }
@@ -146,7 +162,17 @@ export class RunsService implements OnApplicationShutdown {
     const workspace = path.join(config.paths.runs, id);
     this.prepareWorkspace(workspace, input.files, input.entryFile, projectId);
 
+    // Parse the data file before anything starts, so a bad file fails fast with a clear message.
+    const dataRows = input.dataArtifactId && !input.record ? await this.artifacts.readRows(input.userId, input.dataArtifactId) : undefined;
     const { env, secrets } = await this.variables.resolve(input.userId, input.workspaceId);
+    const proxyPassword = (() => {
+      try {
+        return input.proxy ? decodeURIComponent(new URL(input.proxy.includes("://") ? input.proxy : `http://${input.proxy}`).password) : "";
+      } catch {
+        return "";
+      }
+    })();
+    if (proxyPassword) secrets.push(proxyPassword);
     const gemini = await this.settings.gemini(input.userId);
     const childEnv: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
@@ -245,6 +271,15 @@ export class RunsService implements OnApplicationShutdown {
       startUrl: input.record?.url,
       storageState,
       saveSession: keepSession,
+      browser: input.browser ?? "chromium",
+      device: input.device || undefined,
+      locale: input.locale || undefined,
+      timezoneId: input.timezoneId || undefined,
+      geolocation: input.geolocation,
+      proxy: input.proxy || undefined,
+      trace: Boolean(input.trace),
+      dataRows,
+      stopOnError: Boolean(input.stopOnError),
     };
     this.send(session, { type: "start", payload: start });
     return { runId: id };

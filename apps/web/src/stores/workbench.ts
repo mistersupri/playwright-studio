@@ -14,6 +14,16 @@ export interface RunSettings {
   debug: boolean;
   workspaceId: string | null;
   autoSave: boolean;
+  browser: "chromium" | "firefox" | "webkit";
+  device: string | null;
+  locale: string;
+  timezoneId: string;
+  geolocation: { latitude: number; longitude: number } | null;
+  proxy: string;
+  trace: boolean;
+  /** Data runs: an uploaded CSV/XLSX, remembered per project. */
+  data: { projectId: string; artifactId: string; name: string } | null;
+  stopOnError: boolean;
 }
 
 interface WorkbenchState {
@@ -59,7 +69,36 @@ export const DEFAULT_SETTINGS: RunSettings = {
   debug: false,
   workspaceId: null,
   autoSave: false,
+  browser: "chromium",
+  device: null,
+  locale: "",
+  timezoneId: "",
+  geolocation: null,
+  proxy: "",
+  trace: false,
+  data: null,
+  stopOnError: false,
 };
+
+/** The options a run (or a schedule) sends to the server. */
+export function runOptions(s: RunSettings, projectId: string | undefined) {
+  return {
+    timeoutSeconds: s.timeoutSeconds,
+    stealth: s.stealth,
+    binarizeCaptcha: s.binarizeCaptcha,
+    useGeminiCaptcha: s.useGeminiCaptcha,
+    recordVideo: s.recordVideo,
+    browser: s.browser,
+    device: s.device,
+    locale: s.locale,
+    timezoneId: s.timezoneId,
+    geolocation: s.geolocation,
+    proxy: s.proxy,
+    trace: s.trace,
+    dataArtifactId: s.data && s.data.projectId === projectId ? s.data.artifactId : null,
+    stopOnError: s.stopOnError,
+  };
+}
 
 export const useWorkbench = create<WorkbenchState>()(
   persist(

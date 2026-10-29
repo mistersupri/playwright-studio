@@ -216,11 +216,11 @@ ScriptBench sudah bisa menulis, menjalankan dan mengamati script Playwright di b
 | F3 | Autocomplete Playwright | 1 | Selesai |
 | F10 | Address bar | 1 | Selesai |
 | F11 | Inspector elemen | 1 | Selesai |
-| F7 | Browser, perangkat, proxy | 2 | Direncanakan |
-| F9 | Playwright Trace | 2 | Direncanakan |
-| F8 | Run berbasis data | 2 | Direncanakan |
-| F12 | Bandingkan screenshot | 2 | Direncanakan |
-| F13 | Folder output | 2 | Direncanakan |
+| F7 | Browser, perangkat, proxy | 2 | Selesai |
+| F9 | Playwright Trace | 2 | Selesai |
+| F8 | Run berbasis data | 2 | Selesai |
+| F12 | Bandingkan screenshot | 2 | Selesai |
+| F13 | Folder output | 2 | Selesai |
 | F5 | Cron dan zona waktu | 3 | Direncanakan |
 | F4 | Notifikasi | 3 | Direncanakan |
 | F6 | Pemicu lewat API | 3 | Direncanakan |

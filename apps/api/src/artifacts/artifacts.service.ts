@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { and, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import fs from "node:fs";
@@ -29,6 +29,7 @@ const MIME: Record<string, string> = {
   ".html": "text/html",
   ".md": "text/markdown",
   ".xml": "application/xml",
+  ".zip": "application/zip",
 };
 
 export function mimeFor(name: string) {
@@ -37,6 +38,7 @@ export function mimeFor(name: string) {
 
 export function kindFor(name: string): Exclude<ArtifactKind, "upload"> {
   const ext = path.extname(name).toLowerCase();
+  if (ext === ".zip" && /^trace/i.test(path.basename(name))) return "trace";
   if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) return "screenshot";
   if (ext === ".pdf") return "pdf";
   if ([".xlsx", ".xls", ".csv"].includes(ext)) return "excel";
@@ -52,6 +54,7 @@ const toDto = (a: ArtifactRow) => ({
   id: a.id,
   kind: a.kind,
   name: a.name,
+  folder: a.folder,
   mimeType: a.mimeType,
   size: a.size,
   projectId: a.projectId,
@@ -98,7 +101,9 @@ export class ArtifactsService {
         projectId: input.projectId,
         runId: input.runId,
         kind: kindFor(input.name),
-        name: input.name,
+        // "reports/q3.pdf" from a script becomes q3.pdf in the "reports" folder.
+        name: path.posix.basename(input.name),
+        folder: path.posix.dirname(input.name) === "." ? null : path.posix.dirname(input.name),
         mimeType: mimeFor(input.name),
         size: raw.length,
         storagePath: rel,
@@ -162,6 +167,48 @@ export class ArtifactsService {
       });
       return { name: sheet.name, rows };
     });
+  }
+
+  async setFolder(userId: string, id: string, folder: string | null) {
+    await this.owned(userId, id);
+    const [row] = await this.db.update(artifacts).set({ folder }).where(eq(artifacts.id, id)).returning();
+    return toDto(row);
+  }
+
+  /** Rows of an uploaded CSV/XLSX as objects keyed by the header row, for data runs. */
+  async readRows(userId: string, id: string, limit = 1000): Promise<Record<string, string>[]> {
+    const { row, data } = await this.read(userId, id);
+    if (row.kind !== "upload" || !/\.(csv|xlsx)$/i.test(row.name)) {
+      throw new BadRequestException("Data runs need an uploaded .csv or .xlsx file.");
+    }
+    const workbook = new ExcelJS.Workbook();
+    if (row.name.toLowerCase().endsWith(".csv")) await workbook.csv.read(Readable.from(data));
+    else await workbook.xlsx.load(data as unknown as ArrayBuffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) return [];
+    const text = (v: unknown): string => {
+      if (v === null || v === undefined) return "";
+      if (v instanceof Date) return v.toISOString();
+      if (typeof v === "object") {
+        if ("result" in v) return text((v as { result: unknown }).result);
+        if ("text" in v) return String((v as { text: unknown }).text);
+        if ("richText" in v) return (v as { richText: { text: string }[] }).richText.map((t) => t.text).join("");
+      }
+      return String(v);
+    };
+    let headers: string[] = [];
+    const out: Record<string, string>[] = [];
+    sheet.eachRow((r, n) => {
+      const values = (Array.isArray(r.values) ? r.values.slice(1) : []).map(text);
+      if (n === 1) {
+        headers = values.map((h, i) => h.trim() || `column${i + 1}`);
+        return;
+      }
+      if (out.length >= limit || values.every((v) => v === "")) return;
+      out.push(Object.fromEntries(headers.map((h, i) => [h, values[i] ?? ""])));
+    });
+    if (headers.length === 0) throw new BadRequestException("The data file has no header row.");
+    return out;
   }
 
   private unlink(rows: ArtifactRow[]) {

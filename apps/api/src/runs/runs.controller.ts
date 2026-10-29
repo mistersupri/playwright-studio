@@ -5,6 +5,19 @@ import { CurrentUser, type SessionUser } from "../auth/auth.decorators.js";
 import { parse } from "../common/validation.js";
 import { RunsService } from "./runs.service.js";
 
+/** Shared with schedules, which store these and replay them. */
+export const runOptionsShape = {
+  browser: z.enum(["chromium", "firefox", "webkit"]).optional(),
+  device: z.string().max(80).nullish().transform((v) => v || undefined),
+  locale: z.string().max(20).nullish().transform((v) => v || undefined),
+  timezoneId: z.string().max(60).nullish().transform((v) => v || undefined),
+  geolocation: z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).nullish().transform((v) => v ?? undefined),
+  proxy: z.string().max(500).nullish().transform((v) => v || undefined),
+  trace: z.boolean().optional(),
+  dataArtifactId: z.string().max(40).nullish(),
+  stopOnError: z.boolean().optional(),
+};
+
 const startSchema = z.object({
   projectId: z.string().nullish(),
   projectName: z.string().trim().min(1).max(80).default("Untitled"),
@@ -20,6 +33,7 @@ const startSchema = z.object({
   debug: z.boolean().optional(),
   breakpoints: z.array(z.number().int().positive()).max(500).optional(),
   record: z.object({ url: z.string().trim().max(2000) }).optional(),
+  ...runOptionsShape,
 });
 
 @Controller("runs")

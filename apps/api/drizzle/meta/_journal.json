@@ -15,6 +15,13 @@
       "when": 1793277228747,
       "tag": "0001_browser_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793277783203,
+      "tag": "0002_folders_run_options",
+      "breakpoints": true
     }
   ]
 }

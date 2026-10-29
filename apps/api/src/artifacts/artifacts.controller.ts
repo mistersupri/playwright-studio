@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Res, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Res, UploadedFile, UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
@@ -56,6 +56,22 @@ export class ArtifactsController {
     return this.artifacts.sheets(user.id, id);
   }
 
+  @Patch(":id")
+  move(@CurrentUser() user: SessionUser, @Param("id") id: string, @Body() body: unknown) {
+    const { folder } = parse(
+      z.object({
+        folder: z
+          .string()
+          .trim()
+          .max(60)
+          .regex(/^[\w .-]*$/, "Folder names use letters, numbers, spaces, dots and dashes.")
+          .nullable(),
+      }),
+      body,
+    );
+    return this.artifacts.setFolder(user.id, id, folder || null);
+  }
+
   @Delete(":id")
   @HttpCode(204)
   remove(@CurrentUser() user: SessionUser, @Param("id") id: string) {
@@ -67,7 +83,7 @@ export class ArtifactsController {
     const input = parse(
       z.object({
         projectId: z.string().optional(),
-        scope: z.enum(["outputs", "uploads", "all", "screenshot", "pdf", "excel", "video", "upload", "file"]).default("outputs"),
+        scope: z.enum(["outputs", "uploads", "all", "screenshot", "pdf", "excel", "video", "trace", "upload", "file"]).default("outputs"),
       }),
       body,
     );

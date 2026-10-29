@@ -33,12 +33,13 @@ export interface ProjectVersion {
   files: ProjectFile[];
 }
 
-export type ArtifactKind = "screenshot" | "pdf" | "excel" | "video" | "upload" | "file";
+export type ArtifactKind = "screenshot" | "pdf" | "excel" | "video" | "trace" | "upload" | "file";
 
 export interface Artifact {
   id: string;
   kind: ArtifactKind;
   name: string;
+  folder: string | null;
   mimeType: string;
   size: number;
   projectId: string | null;

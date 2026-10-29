@@ -13,7 +13,7 @@ import { api, errorMessage } from "@/lib/api";
 import { formatRelative } from "@/lib/format";
 import type { EnvWorkspace, Schedule } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useIsDirty, useWorkbench } from "@/stores/workbench";
+import { runOptions, useIsDirty, useWorkbench } from "@/stores/workbench";
 import { PanelHeader } from "./panel-header";
 
 const INTERVALS: { value: NonNullable<Schedule["interval"]>; label: string }[] = [
@@ -62,6 +62,8 @@ export function SchedulesPanel() {
         interval: type === "repeat" ? interval : undefined,
         viewportWidth: viewport.width,
         viewportHeight: viewport.height,
+        // The schedule keeps today's run settings (browser, device, proxy, data file…).
+        runOptions: runOptions(useWorkbench.getState().settings, project!.id),
       }),
     onSuccess: () => {
       refresh();

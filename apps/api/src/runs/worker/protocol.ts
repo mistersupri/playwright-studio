@@ -23,6 +23,18 @@ export interface WorkerStart {
   /** Playwright storageState to start from, and whether to report it back at the end. */
   storageState?: unknown;
   saveSession: boolean;
+  browser: "chromium" | "firefox" | "webkit";
+  /** A name from Playwright's device list, e.g. "iPhone 15". */
+  device?: string;
+  locale?: string;
+  timezoneId?: string;
+  geolocation?: { latitude: number; longitude: number };
+  /** e.g. http://user:pass@host:8080 */
+  proxy?: string;
+  trace: boolean;
+  /** Data runs: the entry file runs once per row. */
+  dataRows?: Record<string, string>[];
+  stopOnError: boolean;
 }
 
 export type ParentMessage =

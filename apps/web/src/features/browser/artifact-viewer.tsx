@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Columns2, Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -8,16 +8,23 @@ import { api } from "@/lib/api";
 import { formatBytes, formatRelative } from "@/lib/format";
 import type { Artifact } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { ImageCompare } from "./image-compare";
+import { traceViewerUrl } from "@/lib/artifacts";
 
 interface Props {
   artifact: Artifact | null;
   /** Siblings to step through with the arrow keys (images only). */
   gallery?: Artifact[];
+  /** Images this one can be compared with; defaults to the gallery. */
+  compareWith?: Artifact[];
   onOpenChange: (open: boolean) => void;
   onNavigate?: (a: Artifact) => void;
 }
 
-export function ArtifactViewer({ artifact, gallery = [], onOpenChange, onNavigate }: Props) {
+export function ArtifactViewer({ artifact, gallery = [], compareWith, onOpenChange, onNavigate }: Props) {
+  const [comparing, setComparing] = useState(false);
+  useEffect(() => setComparing(false), [artifact?.id]);
+  const comparable = (compareWith ?? gallery).filter((a) => a.kind === "screenshot" && a.id !== artifact?.id);
   const images = gallery.filter((a) => a.kind === "screenshot");
   const index = artifact ? images.findIndex((a) => a.id === artifact.id) : -1;
   const step = (delta: number) => {
@@ -26,7 +33,7 @@ export function ArtifactViewer({ artifact, gallery = [], onOpenChange, onNavigat
   };
 
   useEffect(() => {
-    if (!artifact || artifact.kind !== "screenshot") return;
+    if (!artifact || artifact.kind !== "screenshot" || comparing) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowRight") step(1);
       if (e.key === "ArrowLeft") step(-1);
@@ -47,15 +54,22 @@ export function ArtifactViewer({ artifact, gallery = [], onOpenChange, onNavigat
                   {formatBytes(artifact.size)} · {formatRelative(artifact.createdAt)}
                 </DialogDescription>
               </div>
+              <div className="flex shrink-0 gap-2">
+              {artifact.kind === "screenshot" && comparable.length > 0 && (
+                <Button variant="outline" size="sm" aria-pressed={comparing} onClick={() => setComparing((c) => !c)}>
+                  <Columns2 /> {comparing ? "Back to image" : "Compare"}
+                </Button>
+              )}
               <Button variant="outline" size="sm" asChild>
                 <a href={`${artifact.url}?download=1`} download={artifact.name}>
                   <Download /> Download
                 </a>
               </Button>
+              </div>
             </DialogHeader>
             <div className="relative min-h-0 flex-1 overflow-auto rounded-md border bg-muted/40">
-              <Body artifact={artifact} />
-              {artifact.kind === "screenshot" && images.length > 1 && (
+              {comparing ? <ImageCompare base={artifact} candidates={comparable} /> : <Body artifact={artifact} />}
+              {artifact.kind === "screenshot" && images.length > 1 && !comparing && (
                 <>
                   <Button variant="secondary" size="icon" aria-label="Previous image" className="absolute top-1/2 left-2 -translate-y-1/2" onClick={() => step(-1)}>
                     <ChevronLeft />
@@ -86,6 +100,19 @@ function Body({ artifact }: { artifact: Artifact }) {
       return <video src={artifact.url} controls className="mx-auto max-h-[75dvh]" />;
     case "excel":
       return <SheetPreview artifact={artifact} />;
+    case "trace":
+      return (
+        <Centered>
+          <span className="grid gap-3">
+            <span>A Playwright trace: every action with DOM snapshots, network requests and console output.</span>
+            <Button asChild className="mx-auto">
+              <a href={traceViewerUrl(artifact)} target="_blank" rel="noreferrer">
+                <Activity /> Open in trace viewer
+              </a>
+            </Button>
+          </span>
+        </Centered>
+      );
     default:
       return <TextPreview artifact={artifact} />;
   }

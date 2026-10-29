@@ -1,8 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, File, FileSpreadsheet, FileText, Image, Trash2, Upload, Video } from "lucide-react";
-import { type DragEvent, useRef, useState } from "react";
+import { Activity, Download, File, FileSpreadsheet, FileText, Folder, FolderInput, Image, MoreHorizontal, Trash2, Upload, Video } from "lucide-react";
+import { type DragEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PromptDialog } from "@/components/prompt-dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -10,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsOwner } from "@/hooks/use-project";
 import { api, errorMessage } from "@/lib/api";
+import { traceViewerUrl } from "@/lib/artifacts";
 import { formatBytes, formatRelative } from "@/lib/format";
 import type { Artifact, ArtifactKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -22,6 +28,7 @@ const FILTERS: { id: "all" | ArtifactKind; label: string }[] = [
   { id: "pdf", label: "PDF" },
   { id: "excel", label: "Sheets" },
   { id: "video", label: "Video" },
+  { id: "trace", label: "Traces" },
   { id: "file", label: "Other" },
   { id: "upload", label: "Inputs" },
 ];
@@ -31,6 +38,7 @@ const ICONS: Record<ArtifactKind, typeof File> = {
   pdf: FileText,
   excel: FileSpreadsheet,
   video: Video,
+  trace: Activity,
   file: File,
   upload: Upload,
 };
@@ -52,6 +60,8 @@ export function Outputs() {
   const [viewing, setViewing] = useState<Artifact | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [folder, setFolder] = useState<string>("all");
+  const [moving, setMoving] = useState<Artifact | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["artifacts", projectId] });
@@ -79,7 +89,21 @@ export function Outputs() {
     onError: (err) => toast.error(errorMessage(err)),
   });
 
-  const list = (artifacts.data ?? []).filter((a) => filter === "all" || a.kind === filter);
+  const move = useMutation({
+    mutationFn: ({ a, folder }: { a: Artifact; folder: string | null }) => api.patch(`/artifacts/${a.id}`, { folder }),
+    onSuccess: refresh,
+    onError: (err) => toast.error(errorMessage(err)),
+  });
+
+  const folders = useMemo(
+    () => [...new Set((artifacts.data ?? []).map((a) => a.folder).filter((f): f is string => Boolean(f)))].sort(),
+    [artifacts.data],
+  );
+  const list = (artifacts.data ?? []).filter(
+    (a) =>
+      (filter === "all" || a.kind === filter) &&
+      (folder === "all" || (folder === "none" ? !a.folder : a.folder === folder)),
+  );
   const outputsCount = (artifacts.data ?? []).filter((a) => a.kind !== "upload").length;
 
   const onDrop = (e: DragEvent) => {
@@ -117,6 +141,19 @@ export function Outputs() {
         ))}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+          {folders.length > 0 && (
+            <Select value={folder} onValueChange={setFolder}>
+              <SelectTrigger size="sm" className="h-7 max-w-36 border-none bg-transparent px-2 text-xs shadow-none" aria-label="Folder">
+                <Folder className="size-3.5" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value="all">All folders</SelectItem>
+                <SelectItem value="none">No folder</SelectItem>
+                {folders.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           {isOwner && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -197,7 +234,8 @@ export function Outputs() {
                       <span className="block truncate font-mono text-xs group-focus-within:underline">
                         {a.kind === "upload" ? `uploads/${a.name}` : a.name}
                       </span>
-                      <span className="block text-xs text-muted-foreground tabular">
+                      <span className="block truncate text-xs text-muted-foreground tabular">
+                        {a.folder && <span className="mr-1 rounded bg-muted px-1 py-px">{a.folder}</span>}
                         {formatBytes(a.size)} · {formatRelative(a.createdAt)}
                       </span>
                     </span>
@@ -208,9 +246,38 @@ export function Outputs() {
                         <Download />
                       </a>
                     </Button>
-                    <Button variant="ghost" size="icon-sm" aria-label={`Delete ${a.name}`} onClick={() => remove.mutate(a)}>
-                      <Trash2 />
-                    </Button>
+                    {a.kind === "trace" && (
+                      <Button variant="ghost" size="icon-sm" asChild>
+                        <a href={traceViewerUrl(a)} target="_blank" rel="noreferrer" aria-label={`Open ${a.name} in the trace viewer`}>
+                          <Activity />
+                        </a>
+                      </Button>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" aria-label={`More actions for ${a.name}`}>
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-52">
+                        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Move to folder</DropdownMenuLabel>
+                        {folders.filter((f) => f !== a.folder).map((f) => (
+                          <DropdownMenuItem key={f} onSelect={() => move.mutate({ a, folder: f })}>
+                            <Folder /> {f}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuItem onSelect={() => setMoving(a)}>
+                          <FolderInput /> New folder…
+                        </DropdownMenuItem>
+                        {a.folder && (
+                          <DropdownMenuItem onSelect={() => move.mutate({ a, folder: null })}>Remove from folder</DropdownMenuItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem variant="destructive" onSelect={() => remove.mutate(a)}>
+                          <Trash2 /> Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </li>
               );
@@ -219,7 +286,20 @@ export function Outputs() {
         )}
       </div>
 
-      <ArtifactViewer artifact={viewing} gallery={list} onOpenChange={(o) => !o && setViewing(null)} onNavigate={setViewing} />
+      <ArtifactViewer artifact={viewing} gallery={list} compareWith={artifacts.data} onOpenChange={(o) => !o && setViewing(null)} onNavigate={setViewing} />
+      <PromptDialog
+        open={moving !== null}
+        onOpenChange={(o) => !o && setMoving(null)}
+        title="New folder"
+        description={moving ? `Moves ${moving.name} into it.` : undefined}
+        label="Folder name"
+        placeholder="Reports"
+        submitLabel="Move"
+        validate={(v) => (/^[\w .-]{1,60}$/.test(v) ? null : "Use letters, numbers, spaces, dots and dashes.")}
+        onSubmit={async (name) => {
+          if (moving) await move.mutateAsync({ a: moving, folder: name });
+        }}
+      />
       <ConfirmDialog
         open={confirmClear}
         onOpenChange={setConfirmClear}
