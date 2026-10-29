@@ -406,7 +406,7 @@ async function run(start: WorkerStart) {
   );
 
   system(`Running ${opts.entryFile}.`);
-  await fn(
+  const result = await fn(
     browser, context, safePage, scriptConsole, buildRequire(), chromium, userPause, breakpoint,
     (sel: string, o?: CaptchaSolveOptions) => captchaFromSelector(page!, sel, o),
     (src: Buffer | string, o?: CaptchaSolveOptions) => captchaFromImage(src, o),
@@ -414,6 +414,7 @@ async function run(start: WorkerStart) {
     path.join(process.cwd(), opts.entryFile),
     process.cwd(),
   );
+  if (result !== undefined) log("script", "info", `Returned ${format([result])}`);
   system("Script finished.", "success");
 }
 

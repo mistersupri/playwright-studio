@@ -1,0 +1,22 @@
+# Database for local development. `npm run dev` starts it for you.
+name: scriptbench-dev
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: scriptbench
+      POSTGRES_PASSWORD: scriptbench
+      POSTGRES_DB: scriptbench
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - dev-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scriptbench -d scriptbench"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  dev-postgres:

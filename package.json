@@ -20,8 +20,5 @@
     "db:up": "docker compose -f docker-compose.dev.yml up -d --wait postgres",
     "db:down": "docker compose -f docker-compose.dev.yml down",
     "db:generate": "npm run db:generate -w @scriptbench/api"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.1"
   }
 }

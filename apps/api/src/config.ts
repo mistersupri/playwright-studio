@@ -43,6 +43,9 @@ function emptyToUndefined(env: NodeJS.ProcessEnv) {
 }
 
 function loadConfig() {
+  // Local runs pick up a repo-level .env; containers get their settings from the environment.
+  const envFile = path.join(REPO_ROOT, ".env");
+  if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
   const parsed = schema.safeParse(emptyToUndefined(process.env));
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n");

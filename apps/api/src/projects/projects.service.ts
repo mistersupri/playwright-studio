@@ -1,9 +1,12 @@
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import fs from "node:fs";
+import path from "node:path";
 import { decryptJson, encryptJson } from "../common/crypto.js";
+import { config } from "../config.js";
 import { newId } from "../common/ids.js";
 import { type Database, InjectDb } from "../database/database.module.js";
-import { type Project, projects, projectVersions, users } from "../database/schema.js";
+import { artifacts, type Project, projects, projectVersions, users } from "../database/schema.js";
 
 export interface ProjectFile {
   name: string;
@@ -133,7 +136,11 @@ export class ProjectsService {
 
   async remove(id: string, userId: string) {
     await this.owned(id, userId);
+    // Artifact rows cascade with the project; their files on disk have to go too.
+    const files = await this.db.select({ path: artifacts.storagePath }).from(artifacts).where(eq(artifacts.projectId, id));
     await this.db.delete(projects).where(eq(projects.id, id));
+    for (const f of files) fs.rmSync(path.join(config.dataDir, f.path), { force: true });
+    fs.rmSync(path.join(config.paths.uploads, id), { recursive: true, force: true });
   }
 
   async duplicate(id: string, userId: string) {
