@@ -1,4 +1,4 @@
-import { Logger } from "@nestjs/common";
+import { Logger, type OnModuleDestroy } from "@nestjs/common";
 import { type OnGatewayConnection, type OnGatewayDisconnect, WebSocketGateway } from "@nestjs/websockets";
 import type { IncomingMessage } from "node:http";
 import { WebSocket } from "ws";
@@ -9,6 +9,7 @@ import { ProjectsService } from "../projects/projects.service.js";
 
 interface Peer {
   socket: WebSocket;
+  token: string | undefined;
   clientId: string;
   user: SessionUser;
   room: string | null;
@@ -16,6 +17,7 @@ interface Peer {
 }
 
 const COLORS = ["#d9480f", "#2b8a3e", "#1971c2", "#c2255c", "#5f3dc4", "#e67700", "#0b7285"];
+const RECHECK_MS = 30_000;
 const colorFor = (id: string) => COLORS[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % COLORS.length];
 
 /**
@@ -23,22 +25,29 @@ const colorFor = (id: string) => COLORS[[...id].reduce((n, c) => n + c.charCodeA
  * Messages are JSON: join, cursor, code, workspace, workspace:request.
  */
 @WebSocketGateway({ path: "/ws" })
-export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   private readonly logger = new Logger(CollabGateway.name);
   private readonly peers = new Map<WebSocket, Peer>();
+  // Sessions and project access can be revoked while a socket is open.
+  private readonly recheck = setInterval(() => void this.revalidate(), RECHECK_MS);
 
   constructor(
     private readonly sessions: SessionService,
     private readonly projects: ProjectsService,
   ) {}
 
+  onModuleDestroy() {
+    clearInterval(this.recheck);
+  }
+
   async handleConnection(socket: WebSocket, req: IncomingMessage) {
-    const user = await this.sessions.resolve(this.sessions.tokenFrom(req));
+    const token = this.sessions.tokenFrom(req);
+    const user = await this.sessions.resolve(token);
     if (!user) {
       socket.close(4401, "unauthorized");
       return;
     }
-    const peer: Peer = { socket, clientId: newId(8), user, room: null };
+    const peer: Peer = { socket, token, clientId: newId(8), user, room: null };
     this.peers.set(socket, peer);
     socket.send(JSON.stringify({ type: "welcome", clientId: peer.clientId }));
     socket.on("message", (raw) => void this.onMessage(peer, raw.toString()));
@@ -48,6 +57,29 @@ export class CollabGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const peer = this.peers.get(socket);
     this.peers.delete(socket);
     if (peer?.room) this.broadcastPresence(peer.room);
+  }
+
+  /**
+   * Drops peers whose session ended (password change, reset, disabled account) and
+   * takes peers out of rooms they can no longer read. A closed socket reconnects with
+   * the browser's current cookie, so the person who changed their own password stays in.
+   */
+  private async revalidate() {
+    for (const peer of [...this.peers.values()]) {
+      const user = await this.sessions.resolve(peer.token).catch(() => null);
+      if (!user) {
+        peer.socket.close(4000, "session changed");
+        continue;
+      }
+      if (!peer.room) continue;
+      const room = peer.room;
+      const allowed = await this.projects.readable(room, user.id).then(() => true, () => false);
+      if (!allowed && peer.room === room) {
+        peer.room = null;
+        this.sendTo(peer, { type: "error", message: "You no longer have access to this project." });
+        this.broadcastPresence(room);
+      }
+    }
   }
 
   private roomPeers(room: string) {

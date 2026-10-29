@@ -3,6 +3,7 @@ export interface User {
   email: string;
   name: string;
   avatarUrl: string | null;
+  role: "admin" | "member";
 }
 
 export interface ProjectFile {
@@ -24,6 +25,15 @@ export interface ProjectSummary {
 
 export interface Project extends ProjectSummary {
   files: ProjectFile[];
+  /** How the signed-in user relates to this project. */
+  myRole: "owner" | "editor" | "viewer" | "public";
+}
+
+export interface ProjectMember {
+  userId: string;
+  email: string;
+  name: string;
+  role: "owner" | "editor" | "viewer";
 }
 
 export interface ProjectVersion {
@@ -48,7 +58,7 @@ export interface Artifact {
   url: string;
 }
 
-export type RunStatus = "running" | "success" | "failed" | "stopped";
+export type RunStatus = "queued" | "running" | "success" | "failed" | "stopped";
 export type LogSource = "script" | "browser" | "system";
 export type LogLevel = "log" | "info" | "success" | "warning" | "error";
 

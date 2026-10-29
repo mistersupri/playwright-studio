@@ -5,7 +5,7 @@ import { type ChildProcess, fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, type SQL } from "drizzle-orm";
 import { type ArtifactDto, ArtifactsService } from "../artifacts/artifacts.service.js";
 import { SettingsService } from "../ai/settings.service.js";
 import { decryptJson, encryptJson } from "../common/crypto.js";
@@ -71,7 +71,7 @@ export const RUN_OPTION_KEYS = [
 ] as const;
 
 type RunEvent =
-  | { type: "status"; data: { status: RunStatus; paused: boolean; line?: number } }
+  | { type: "status"; data: { status: RunStatus; paused: boolean; line?: number; position?: number } }
   | { type: "log"; data: LogLine }
   | { type: "preview"; data: { image: string } }
   | { type: "network"; data: NetworkEvent }
@@ -84,7 +84,7 @@ type RunEvent =
   | { type: "inspected"; data: Extract<WorkerMessage, { type: "inspected" }> }
   | { type: "done"; data: { status: RunStatus; error?: string } };
 
-type RunStatus = "running" | "success" | "failed" | "stopped";
+type RunStatus = "queued" | "running" | "success" | "failed" | "stopped";
 
 export interface FinishedRun {
   runId: string;
@@ -94,7 +94,7 @@ export interface FinishedRun {
   entryFile: string;
   scheduleId: string | null;
   trigger: "manual" | "schedule" | "api";
-  status: Exclude<RunStatus, "running">;
+  status: Exclude<RunStatus, "running" | "queued">;
   error?: string;
   startedAt: Date;
   finishedAt: Date;
@@ -106,7 +106,8 @@ interface Session {
   id: string;
   userId: string;
   projectId: string | null;
-  child: ChildProcess;
+  /** Null while the run waits in the queue. */
+  child: ChildProcess | null;
   workspace: string;
   sourceFiles: Set<string>;
   baseline: Map<string, number>;
@@ -148,6 +149,8 @@ export class RunsService implements OnApplicationShutdown {
   private readonly logger = new Logger(RunsService.name);
   private readonly sessions = new Map<string, Session>();
   private readonly finishedListeners: ((r: FinishedRun) => void)[] = [];
+  /** Runs waiting for a free slot, oldest first. */
+  private readonly queue: { session: Session; launch: () => void }[] = [];
 
   /** Called once per run when it ends, whatever the outcome. */
   onFinished(listener: (r: FinishedRun) => void) {
@@ -167,12 +170,6 @@ export class RunsService implements OnApplicationShutdown {
   }
 
   async start(input: StartRunInput) {
-    if (this.activeCount() >= config.maxConcurrentRuns) {
-      throw new HttpException(
-        `The server is already running ${config.maxConcurrentRuns} scripts. Wait for one to finish.`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
     let projectId: string | null = null;
     let storageState: unknown;
     let keepSession = false;
@@ -187,7 +184,6 @@ export class RunsService implements OnApplicationShutdown {
 
     const id = newId(14);
     const workspace = path.join(config.paths.runs, id);
-    this.prepareWorkspace(workspace, input.files, input.entryFile, projectId);
 
     // Parse the data file before anything starts, so a bad file fails fast with a clear message.
     const dataRows = input.dataArtifactId && !input.record ? await this.artifacts.readRows(input.userId, input.dataArtifactId) : undefined;
@@ -213,6 +209,7 @@ export class RunsService implements OnApplicationShutdown {
       ...(input.extraEnv ?? {}),
     };
 
+    const queued = this.activeCount() >= config.maxConcurrentRuns;
     await this.db.insert(runs).values({
       id,
       userId: input.userId,
@@ -221,20 +218,19 @@ export class RunsService implements OnApplicationShutdown {
       entryFile: input.record ? "Recording" : input.entryFile,
       trigger: input.trigger ?? "manual",
       scheduleId: input.scheduleId ?? null,
-      status: "running",
+      status: queued ? "queued" : "running",
     });
 
-    const child = fork(WORKER, [], { cwd: workspace, env: childEnv, execArgv: [], stdio: ["ignore", "pipe", "pipe", "ipc"] });
     const session: Session = {
       id,
       userId: input.userId,
       projectId,
-      child,
+      child: null,
       workspace,
       sourceFiles: new Set(input.files.map((f) => f.name)),
-      baseline: new Map(walk(workspace).map((f) => [f, fs.statSync(path.join(workspace, f)).mtimeMs])),
+      baseline: new Map(),
       pendingSizes: new Map(),
-      status: "running",
+      status: queued ? "queued" : "running",
       paused: false,
       choice: null,
       logs: [],
@@ -260,6 +256,14 @@ export class RunsService implements OnApplicationShutdown {
       waiters: [],
     };
     this.sessions.set(id, session);
+
+    const launch = () => {
+    session.status = "running";
+    session.meta.startedAt = new Date();
+    this.prepareWorkspace(workspace, input.files, input.entryFile, projectId);
+    session.baseline = new Map(walk(workspace).map((f) => [f, fs.statSync(path.join(workspace, f)).mtimeMs]));
+    const child = fork(WORKER, [], { cwd: workspace, env: childEnv, execArgv: [], stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    session.child = child;
 
     const pipeOutput = (level: LogLevel) => (chunk: Buffer) => {
       for (const line of chunk.toString().split("\n").filter(Boolean)) {
@@ -319,7 +323,32 @@ export class RunsService implements OnApplicationShutdown {
       stopOnError: Boolean(input.stopOnError),
     };
     this.send(session, { type: "start", payload: start });
-    return { runId: id };
+    this.emit(session, this.statusEvent(session));
+    };
+
+    if (queued) {
+      this.queue.push({ session, launch });
+      this.pushLog(session, { source: "system", level: "info", message: `Queued: the server is running ${config.maxConcurrentRuns} scripts already.`, at: new Date().toISOString() });
+      this.broadcastQueue();
+    } else {
+      launch();
+    }
+    return { runId: id, status: session.status };
+  }
+
+  /** Start queued runs while there is room, and tell the rest where they stand. */
+  private pumpQueue() {
+    while (this.queue.length && this.activeCount() < config.maxConcurrentRuns) {
+      const next = this.queue.shift()!;
+      void this.db.update(runs).set({ status: "running" }).where(eq(runs.id, next.session.id)).catch(() => {});
+      this.pushLog(next.session, { source: "system", level: "info", message: "A slot opened; starting.", at: new Date().toISOString() });
+      next.launch();
+    }
+    this.broadcastQueue();
+  }
+
+  private broadcastQueue() {
+    for (const q of this.queue) this.emit(q.session, this.statusEvent(q.session));
   }
 
   private prepareWorkspace(dir: string, files: ProjectFile[], entryFile: string, projectId: string | null) {
@@ -338,7 +367,7 @@ export class RunsService implements OnApplicationShutdown {
   }
 
   private send(session: Session, msg: ParentMessage) {
-    if (session.child.connected) session.child.send(msg);
+    if (session.child?.connected) session.child.send(msg);
   }
 
   private emit(session: Session, event: RunEvent) {
@@ -352,7 +381,8 @@ export class RunsService implements OnApplicationShutdown {
   }
 
   private statusEvent(session: Session): RunEvent {
-    return { type: "status", data: { status: session.status, paused: session.paused, line: session.pausedLine } };
+    const position = session.status === "queued" ? this.queue.findIndex((q) => q.session === session) + 1 : undefined;
+    return { type: "status", data: { status: session.status, paused: session.paused, line: session.pausedLine, position } };
   }
 
   private onWorkerMessage(session: Session, msg: WorkerMessage) {
@@ -432,7 +462,7 @@ export class RunsService implements OnApplicationShutdown {
             continue;
           }
           session.pendingSizes.delete(rel);
-          const artifact = await this.artifacts.storeOutput({
+          const stored = await this.artifacts.storeOutput({
             userId: session.userId,
             projectId: session.projectId,
             runId: session.id,
@@ -440,8 +470,12 @@ export class RunsService implements OnApplicationShutdown {
             name: rel.split(path.sep).join("/"),
           });
           session.baseline.delete(rel);
-          session.artifacts.push(artifact);
-          this.emit(session, { type: "artifact", data: artifact });
+          if (!stored) {
+            this.pushLog(session, { source: "system", level: "warning", message: `Storage quota reached: ${rel} was not kept.`, at: new Date().toISOString() });
+            continue;
+          }
+          session.artifacts.push(stored);
+          this.emit(session, { type: "artifact", data: stored });
         }
       } catch (err) {
         this.logger.warn(`Artifact scan failed for run ${session.id}: ${(err as Error).message}`);
@@ -455,7 +489,8 @@ export class RunsService implements OnApplicationShutdown {
   }
 
   private async complete(session: Session, status: RunStatus, error?: string) {
-    if (session.status !== "running") return;
+    if (session.status !== "running" && session.status !== "queued") return;
+    const wasQueued = session.status === "queued";
     session.status = session.timedOut ? "failed" : status;
     session.error = error;
     session.paused = false;
@@ -490,8 +525,10 @@ export class RunsService implements OnApplicationShutdown {
     }
     fs.rmSync(session.workspace, { recursive: true, force: true });
     setTimeout(() => {
-      if (session.child.exitCode === null) session.child.kill("SIGKILL");
+      if (session.child && session.child.exitCode === null) session.child.kill("SIGKILL");
     }, 5000);
+    if (!wasQueued) this.pumpQueue();
+    else this.broadcastQueue();
     setTimeout(() => this.sessions.delete(session.id), 60_000);
   }
 
@@ -514,7 +551,7 @@ export class RunsService implements OnApplicationShutdown {
     for (const step of s.steps) listener({ type: "step", data: step });
     if (s.recording) listener({ type: "recording", data: { on: true } });
     if (s.choice) listener({ type: "choice", data: s.choice });
-    if (s.status !== "running") {
+    if (s.status !== "running" && s.status !== "queued") {
       listener({ type: "done", data: { status: s.status, error: s.error } });
       return () => {};
     }
@@ -525,7 +562,7 @@ export class RunsService implements OnApplicationShutdown {
   /** Resolves when the run ends, or with null after the timeout. */
   waitFor(id: string, userId: string, timeoutMs: number): Promise<FinishedRun | null> {
     const s = this.session(id, userId);
-    if (s.status !== "running") return Promise.resolve(null);
+    if (s.status !== "running" && s.status !== "queued") return Promise.resolve(null);
     return new Promise((resolve) => {
       const t = setTimeout(() => resolve(null), timeoutMs);
       s.waiters.push((r) => {
@@ -537,12 +574,19 @@ export class RunsService implements OnApplicationShutdown {
 
   async stop(id: string, userId: string) {
     const s = this.session(id, userId);
+    if (s.status === "queued") {
+      const i = this.queue.findIndex((q) => q.session === s);
+      if (i >= 0) this.queue.splice(i, 1);
+      this.pushLog(s, { source: "system", level: "warning", message: "Removed from the queue.", at: new Date().toISOString() });
+      await this.complete(s, "stopped");
+      return;
+    }
     if (s.status !== "running") return;
     this.send(s, { type: "stop" });
     s.timers.push(
       setTimeout(() => {
         if (s.status === "running") {
-          s.child.kill("SIGKILL");
+          s.child?.kill("SIGKILL");
           void this.complete(s, "stopped", s.error);
         }
       }, 8000),
@@ -611,15 +655,31 @@ export class RunsService implements OnApplicationShutdown {
     await this.db.delete(runs).where(eq(runs.id, id));
   }
 
+  /** Retention: drop run history and run outputs older than RETENTION_DAYS. Inputs stay. */
+  async purgeExpired() {
+    if (!config.retentionDays) return { runs: 0, files: 0 };
+    const cutoff = new Date(Date.now() - config.retentionDays * 24 * 60 * 60_000);
+    const files = await this.artifacts.deleteOutputsBefore(cutoff);
+    const removed = await this.db
+      .delete(runs)
+      .where(and(lt(runs.createdAt, cutoff), ne(runs.status, "running"), ne(runs.status, "queued")))
+      .returning({ id: runs.id });
+    if (removed.length || files) this.logger.log(`Retention: removed ${removed.length} runs and ${files} files older than ${config.retentionDays} days.`);
+    return { runs: removed.length, files };
+  }
+
   async onApplicationShutdown() {
     for (const s of this.sessions.values()) {
-      if (s.status === "running") s.child.kill("SIGKILL");
+      if (s.status === "running") s.child?.kill("SIGKILL");
     }
   }
 
   /** Runs left as "running" by a crash or restart can never finish; mark them. */
   async markOrphans() {
-    await this.db.update(runs).set({ status: "failed", error: "The server restarted during this run.", finishedAt: new Date() }).where(eq(runs.status, "running"));
+    await this.db
+      .update(runs)
+      .set({ status: "failed", error: "The server restarted during this run.", finishedAt: new Date() })
+      .where(inArray(runs.status, ["running", "queued"]));
     fs.rmSync(config.paths.runs, { recursive: true, force: true });
     fs.mkdirSync(config.paths.runs, { recursive: true });
   }

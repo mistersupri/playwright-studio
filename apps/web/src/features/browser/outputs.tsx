@@ -13,7 +13,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useIsOwner } from "@/hooks/use-project";
+import { useCanEdit } from "@/hooks/use-project";
 import { api, errorMessage } from "@/lib/api";
 import { traceViewerUrl } from "@/lib/artifacts";
 import { formatBytes, formatRelative } from "@/lib/format";
@@ -53,7 +53,7 @@ export function useArtifacts(projectId: string | undefined) {
 
 export function Outputs() {
   const projectId = useWorkbench((s) => s.project?.id);
-  const isOwner = useIsOwner();
+  const isOwner = useCanEdit();
   const qc = useQueryClient();
   const artifacts = useArtifacts(projectId);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["id"]>("all");

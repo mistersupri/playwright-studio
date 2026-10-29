@@ -22,7 +22,8 @@ export function LoginPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const [mode, setMode] = useState<"signin" | "register">("signin");
+  const [mode, setMode] = useState<"signin" | "register" | "forgot">("signin");
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(() => {
     const code = params.get("error");
     return code ? (OAUTH_ERRORS[code] ?? "Google sign-in failed. Try again.") : null;
@@ -40,6 +41,12 @@ export function LoginPage() {
     setBusy(true);
     setError(null);
     try {
+      if (mode === "forgot") {
+        const email = String(form.get("email") ?? "");
+        await api.post("/auth/forgot", { email });
+        setSentTo(email);
+        return;
+      }
       const { user } = await api.post<{ user: User }>(mode === "signin" ? "/auth/login" : "/auth/register", {
         email: String(form.get("email") ?? ""),
         password: String(form.get("password") ?? ""),
@@ -58,12 +65,30 @@ export function LoginPage() {
     <main className="flex min-h-full flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-[360px]">
         <Wordmark className="mb-8" />
-        <h1 className="text-xl font-semibold tracking-tight">
-          {mode === "signin" ? "Sign in to your workbench" : "Create your account"}
-        </h1>
+        <h1 className="text-xl font-semibold tracking-tight">{TITLES[mode]}</h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Write Playwright scripts, run them in a real Chromium, and watch every step as it happens.
+          {mode === "forgot"
+            ? providers.data?.passwordReset
+              ? "Enter the email you sign in with and we will send you a link to choose a new password."
+              : "Password reset links need email, which this server does not send."
+            : "Write Playwright scripts, run them in a real Chromium, and watch every step as it happens."}
         </p>
+
+        {mode === "forgot" ? (
+          <ForgotPassword
+            available={providers.data?.passwordReset ?? false}
+            sentTo={sentTo}
+            busy={busy}
+            error={error}
+            onSubmit={submit}
+            onBack={() => {
+              setMode("signin");
+              setSentTo(null);
+              setError(null);
+            }}
+          />
+        ) : (
+          <>
 
         <form className="mt-8 grid gap-4" onSubmit={submit} noValidate={false}>
           {mode === "register" && (
@@ -77,7 +102,21 @@ export function LoginPage() {
             <Input id="email" name="email" type="email" autoComplete="email" required autoFocus />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="password">Password</Label>
+            <div className="flex items-baseline justify-between gap-3">
+              <Label htmlFor="password">Password</Label>
+              {mode === "signin" && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:underline"
+                  onClick={() => {
+                    setMode("forgot");
+                    setError(null);
+                  }}
+                >
+                  Forgot password?
+                </button>
+              )}
+            </div>
             <Input
               id="password"
               name="password"
@@ -129,8 +168,79 @@ export function LoginPage() {
             </button>
           </p>
         )}
+          </>
+        )}
         {providers.isPending && <Spinner className="mt-8 text-muted-foreground" />}
       </div>
     </main>
+  );
+}
+
+const TITLES = {
+  signin: "Sign in to your workbench",
+  register: "Create your account",
+  forgot: "Reset your password",
+};
+
+function ForgotPassword(props: {
+  available: boolean;
+  sentTo: string | null;
+  busy: boolean;
+  error: string | null;
+  onSubmit: (e: FormEvent<HTMLFormElement>) => void;
+  onBack: () => void;
+}) {
+  const back = (
+    <button
+      type="button"
+      className="mt-8 text-sm font-medium underline-offset-4 hover:underline focus-visible:underline"
+      onClick={props.onBack}
+    >
+      Back to sign in
+    </button>
+  );
+
+  if (!props.available) {
+    return (
+      <>
+        <p className="mt-8 rounded-md border bg-muted/40 px-3 py-2.5 text-sm">
+          Ask an administrator to set a temporary password for you in Settings → Users.
+        </p>
+        {back}
+      </>
+    );
+  }
+
+  if (props.sentTo) {
+    return (
+      <>
+        <p role="status" className="mt-8 rounded-md border bg-muted/40 px-3 py-2.5 text-sm">
+          If <span className="font-medium">{props.sentTo}</span> has an account, a reset link is on its way. The link
+          works for one hour.
+        </p>
+        {back}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <form className="mt-8 grid gap-4" onSubmit={props.onSubmit}>
+        <div className="grid gap-1.5">
+          <Label htmlFor="email">Email</Label>
+          <Input id="email" name="email" type="email" autoComplete="email" required autoFocus />
+        </div>
+        {props.error && (
+          <p role="alert" className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
+            {props.error}
+          </p>
+        )}
+        <Button type="submit" size="lg" disabled={props.busy} className="mt-1">
+          {props.busy && <Spinner />}
+          Send reset link
+        </Button>
+      </form>
+      {back}
+    </>
   );
 }

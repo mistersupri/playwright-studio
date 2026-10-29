@@ -42,7 +42,7 @@ export class V1Controller {
     const files = this.projects.files(project);
     const entryFile = input.entryFile ?? files[0]?.name;
     if (!files.some((f) => f.name === entryFile)) throw new NotFoundException(`File ${entryFile} is not in the project.`);
-    const { runId } = await this.runs.start({
+    const { runId, status } = await this.runs.start({
       userId: user.id,
       projectId: project.id,
       projectName: project.name,
@@ -53,7 +53,7 @@ export class V1Controller {
       timeoutSeconds: input.timeoutSeconds ?? 300,
       trigger: "api",
     });
-    if (!input.wait) return { runId, status: "running" };
+    if (!input.wait) return { runId, status };
     await this.runs.waitFor(runId, user.id, MAX_WAIT_MS);
     return this.run(user, runId);
   }

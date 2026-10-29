@@ -7,8 +7,9 @@
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "db:generate": "drizzle-kit generate",
+    "test": "vitest run"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.13",
@@ -46,6 +47,7 @@
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.2",
     "drizzle-kit": "^0.31.11",
-    "typescript": "5.9"
+    "typescript": "5.9",
+    "vitest": "^5.0.5"
   }
 }

@@ -170,7 +170,7 @@ ScriptBench sudah bisa menulis, menjalankan dan mengamati script Playwright di b
 ### F16. Antrean, retensi, kuota
 
 - **Antrean.** Saat batas run bersamaan tercapai, run baru berstatus *Queued* dengan posisi antrean, dan otomatis mulai saat ada slot. Yang menunggu bisa membatalkan.
-- **Retensi.** `RETENTION_DAYS` (default 30, `0` = simpan selamanya): riwayat run dan file output yang lebih tua dihapus otomatis setiap hari. File input (upload) tidak terhapus.
+- **Retensi.** `RETENTION_DAYS` (default 30, `0` = simpan selamanya): riwayat run dan file output yang lebih tua dihapus otomatis (dicek satu menit setelah server mulai, lalu setiap 6 jam). File input (upload) tidak terhapus.
 - **Kuota.** `STORAGE_QUOTA_MB` per user (default 0 = tanpa batas). Penggunaan tampil di pengaturan akun. Saat kuota habis, upload ditolak dan run tetap jalan tapi file outputnya tidak disimpan (diberi peringatan di log).
 
 ### F15. Keamanan akun dan tim
@@ -181,12 +181,21 @@ ScriptBench sudah bisa menulis, menjalankan dan mengamati script Playwright di b
 - **Peran**: `admin` dan `member`. Akun pertama dan `ADMIN_EMAIL` otomatis admin.
 - **Halaman admin**: daftar user, penggunaan penyimpanan, ubah peran, nonaktifkan atau aktifkan, reset password.
 - **Anggota project**: pemilik mengundang user lain sebagai *Editor* (boleh menyimpan dan menjadwalkan) atau *Viewer* (lihat dan jalankan).
+- **Pencabutan sesi**: ganti password, reset, dan menonaktifkan akun menaikkan `sessionVersion`, sehingga semua sesi lama langsung ditolak. Koneksi kolaborasi live (WebSocket) dicek ulang setiap 30 detik: sesi yang sudah dicabut diputus, dan user yang aksesnya ke project dicabut dikeluarkan dari room.
 
 ### F14. Test otomatis dan CI
 
-- Unit test (Vitest) untuk bagian murni: transformasi import, generator locator, pemetaan tombol, enkripsi, perhitungan jadwal, parsing data.
-- E2E (Playwright Test) untuk alur utama: daftar, run, rekam, inspect, variabel rahasia, jadwal cron, antrean, API token.
-- GitHub Actions: typecheck, unit, build, e2e (dengan Postgres service), lalu build image Docker.
+- **Unit test (Vitest)**, `npm test`:
+  - API: transformasi import, generator locator (dengan Chromium sungguhan), enkripsi, cron dengan zona waktu, nama dan jenis file, rate limiter.
+  - Web: perapian dan pembuatan kode langkah rekaman, pemetaan tombol keyboard.
+- **E2E (Playwright Test)**, `npm run build && npm run test:e2e`. Server build produksi berjalan di port 3100 dengan folder data baru. Database memakai PGlite, atau Postgres kosong lewat `E2E_DATABASE_URL`. Alur yang dicakup:
+  - daftar, keluar, password salah, lupa password;
+  - run yang menulis output dan muncul di Files;
+  - run yang gagal;
+  - API token dengan `wait`;
+  - berbagi project ke Viewer.
+- **GitHub Actions** (`.github/workflows/ci.yml`): typecheck dan unit test, e2e dengan service Postgres 17, dan build image Docker dengan cache.
+- Rekam, inspect, antrean, jadwal cron dan notifikasi belum punya e2e otomatis. Fitur-fitur ini diverifikasi dengan skrip Playwright manual saat dikembangkan, dan jadi kandidat e2e berikutnya.
 
 ---
 
@@ -224,6 +233,6 @@ ScriptBench sudah bisa menulis, menjalankan dan mengamati script Playwright di b
 | F5 | Cron dan zona waktu | 3 | Selesai |
 | F4 | Notifikasi | 3 | Selesai |
 | F6 | Pemicu lewat API | 3 | Selesai |
-| F16 | Antrean, retensi, kuota | 4 | Direncanakan |
-| F15 | Keamanan akun dan tim | 4 | Direncanakan |
-| F14 | Test dan CI | 4 | Direncanakan |
+| F16 | Antrean, retensi, kuota | 4 | Selesai |
+| F15 | Keamanan akun dan tim | 4 | Selesai |
+| F14 | Test dan CI | 4 | Selesai |

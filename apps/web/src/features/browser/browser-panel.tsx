@@ -97,6 +97,7 @@ function LiveView() {
   const recording = useRun((s) => s.recording);
   const recordOnly = useRun((s) => s.recordOnly);
   const inspected = useRun((s) => s.inspected);
+  const queuePosition = useRun((s) => s.queuePosition);
   const viewport = useWorkbench((s) => s.settings.viewport);
   const projectId = useWorkbench((s) => s.project?.id);
   const controls = useRunControls();
@@ -310,7 +311,14 @@ function LiveView() {
           </>
         ) : (
           <div className="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">
-            {phase === "starting" || (live && !preview) ? (
+            {phase === "queued" ? (
+              <span className="max-w-xs">
+                <span className="block font-medium text-foreground">Waiting for a free browser</span>
+                <span className="mt-1 block">
+                  The server is busy. This run is number {queuePosition ?? 1} in line and starts by itself. Stop removes it from the queue.
+                </span>
+              </span>
+            ) : phase === "starting" || (live && !preview) ? (
               <span className="flex items-center gap-2">
                 <Spinner /> Starting Chromium
               </span>
@@ -353,7 +361,7 @@ function LiveView() {
 
       <RecordedSteps />
 
-      {active && (
+      {active && phase !== "queued" && (
         <div className="flex shrink-0 items-center gap-2 border-t p-2">
           {!recordOnly && (
             <Button size="sm" variant="outline" onClick={paused ? controls.resume : controls.pause} disabled={!live}>

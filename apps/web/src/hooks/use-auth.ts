@@ -13,7 +13,7 @@ export function useMe() {
 export function useProviders() {
   return useQuery({
     queryKey: ["auth-providers"],
-    queryFn: () => api.get<{ google: boolean; registration: boolean }>("/auth/providers"),
+    queryFn: () => api.get<{ google: boolean; registration: boolean; passwordReset: boolean }>("/auth/providers"),
     staleTime: Infinity,
   });
 }

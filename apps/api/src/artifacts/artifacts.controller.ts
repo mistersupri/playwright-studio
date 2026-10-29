@@ -32,7 +32,7 @@ export class ArtifactsController {
   ) {
     if (!projectId) throw new BadRequestException("Save the project before uploading files.");
     if (!file) throw new BadRequestException("Choose a file to upload.");
-    await this.projects.owned(projectId, user.id);
+    await this.projects.editable(projectId, user.id);
     return this.artifacts.storeUpload(user.id, projectId, file.originalname, file.buffer);
   }
 

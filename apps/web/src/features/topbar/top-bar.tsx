@@ -20,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useSettingsDialog } from "@/features/settings/settings-store";
 import { useMe, useSignOut } from "@/hooks/use-auth";
 import { useCollab } from "@/hooks/use-collab";
-import { useDuplicateProject, useIsOwner, useSaveProject } from "@/hooks/use-project";
+import { useCanEdit, useDuplicateProject, useIsOwner, useSaveProject } from "@/hooks/use-project";
 import { useRunControls } from "@/hooks/use-run-controls";
 import { api, errorMessage } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
@@ -48,6 +48,7 @@ export function TopBar() {
   const updateSettings = useWorkbench((s) => s.updateSettings);
   const dirty = useIsDirty();
   const isOwner = useIsOwner();
+  const canEdit = useCanEdit();
   const phase = useRun((s) => s.phase);
   const running = isActive(phase);
   const controls = useRunControls();
@@ -82,7 +83,7 @@ export function TopBar() {
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        if (isOwner && dirty && !save.isPending) save.mutate();
+        if (canEdit && dirty && !save.isPending) save.mutate();
       } else if (mod && e.key === "Enter") {
         e.preventDefault();
         if (!isActive(useRun.getState().phase)) controls.start();
@@ -90,11 +91,11 @@ export function TopBar() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOwner, dirty, save, controls]);
+  }, [canEdit, dirty, save, controls]);
 
   // Autosave a moment after the last edit.
   useEffect(() => {
-    if (!autoSave || !dirty || !isOwner || save.isPending) return;
+    if (!autoSave || !dirty || !canEdit || save.isPending) return;
     const t = window.setTimeout(() => save.mutate(), 1500);
     return () => window.clearTimeout(t);
   });
@@ -132,7 +133,7 @@ export function TopBar() {
               Open project <DropdownMenuShortcut>{MOD} K</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={!isOwner} onSelect={() => setDialog("rename")}>
+            <DropdownMenuItem disabled={!canEdit} onSelect={() => setDialog("rename")}>
               <Pencil /> Rename
             </DropdownMenuItem>
             <DropdownMenuItem disabled={!project || duplicate.isPending} onSelect={() => project && duplicate.mutate(project.id)}>
@@ -147,12 +148,16 @@ export function TopBar() {
             <DropdownMenuItem onSelect={downloadZip}>
               <Download /> Download as .zip
             </DropdownMenuItem>
-            {isOwner && (
+            {canEdit && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => updateSettings({ autoSave: !autoSave })}>
                   <Save /> {autoSave ? "Turn off autosave" : "Turn on autosave"}
                 </DropdownMenuItem>
+              </>
+            )}
+            {isOwner && (
+              <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={() => setDialog("delete")}>
                   <Trash2 /> Delete project
@@ -162,7 +167,7 @@ export function TopBar() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {isOwner ? (
+        {canEdit ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

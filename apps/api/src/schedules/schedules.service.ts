@@ -95,7 +95,7 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
   }
 
   async create(userId: string, input: ScheduleInput) {
-    await this.projects.owned(input.projectId, userId);
+    await this.projects.editable(input.projectId, userId);
     const base = { type: input.type, interval: input.interval ?? "daily", cron: input.cron ?? null, timezone: input.timezone ?? null } as const;
     const nextRunAt = input.type === "once" ? new Date(input.runAt!) : this.nextRun(base);
     if (!nextRunAt) throw new BadRequestException("This schedule would never run.");

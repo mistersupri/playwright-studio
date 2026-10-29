@@ -31,6 +31,10 @@ Other scripts:
 | `npm run dev:api` / `npm run dev:web` | Start one side only |
 | `npm run build` | Build web and API |
 | `npm run typecheck` | Type-check both apps |
+| `npm test` | Unit tests (Vitest) for both apps |
+| `npm run test:e2e` | End-to-end tests (Playwright) against the production build; run `npm run build` first |
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the type checks, unit tests, end-to-end tests against PostgreSQL and a Docker build on every push and pull request.
 | `npm run db:up` / `npm run db:down` | Start or stop the dev database |
 | `npm run db:generate` | Create a migration after editing `apps/api/src/database/schema.ts` |
 
@@ -61,9 +65,19 @@ Back up both volumes, and keep `ENCRYPTION_KEY` safe: scripts, variables, API ke
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | no | Enables "Continue with Google"; redirect URI is `<APP_URL>/api/auth/google/callback` |
 | `GEMINI_API_KEY` | no | Server-wide key for script generation and CAPTCHA reading; people can add their own |
 | `SMTP_URL`, `SMTP_FROM` | no | Enables email notifications, e.g. `smtps://user:pass@smtp.example.com` |
-| `MAX_CONCURRENT_RUNS` | no | Runs allowed at once (default 3) |
+| `MAX_CONCURRENT_RUNS` | no | Runs allowed at once (default 3); more are queued and start when a slot is free |
 | `MAX_RUN_SECONDS` | no | Upper bound for a run's time limit (default 600) |
+| `STORAGE_QUOTA_MB` | no | Storage per person for outputs and uploads (default 0, no limit) |
+| `RETENTION_DAYS` | no | Run history and outputs older than this are deleted (default 30; 0 keeps them) |
 | `DATA_DIR` | no | Where outputs, uploads and installed packages go (`/data` in the image) |
+
+## Accounts and teams
+
+- The first account, and the one in `ADMIN_EMAIL`, is an admin. Admins manage people in **Settings → Users**: change roles, disable accounts, and hand out temporary passwords.
+- Anyone can change their password in **Settings → Account**. With `SMTP_URL` set, the sign-in page also offers a reset link by email.
+- Changing or resetting a password, or disabling an account, signs that account out everywhere.
+- A project owner can add people from **Share** as *Can edit* (save, schedule, upload) or *Can view and run*.
+- Sign-in is limited to 10 failed attempts per 15 minutes for each address and email.
 
 ## How a run works
 

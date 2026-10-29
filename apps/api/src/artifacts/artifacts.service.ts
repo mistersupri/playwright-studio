@@ -1,5 +1,6 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { and, desc, eq, inArray, ne, type SQL } from "drizzle-orm";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, PayloadTooLargeException } from "@nestjs/common";
+import { ProjectsService } from "../projects/projects.service.js";
+import { and, desc, eq, inArray, lt, ne, type SQL, sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import fs from "node:fs";
 import path from "node:path";
@@ -66,14 +67,39 @@ export type ArtifactDto = ReturnType<typeof toDto>;
 
 @Injectable()
 export class ArtifactsService {
-  constructor(@InjectDb() private readonly db: Database) {}
+  constructor(
+    @InjectDb() private readonly db: Database,
+    private readonly projects: ProjectsService,
+  ) {}
+
+  /** Project members see and manage every file of the project, not just their own. */
+  private async teamRole(userId: string, projectId: string | null) {
+    if (!projectId) return null;
+    const p = await this.projects.findRaw(projectId).catch(() => null);
+    if (!p) return null;
+    const role = await this.projects.roleOf(p, userId);
+    return role === "public" ? null : role;
+  }
+
+  async usage(userId: string) {
+    const [row] = await this.db
+      .select({ used: sql<number>`coalesce(sum(${artifacts.size}), 0)::bigint` })
+      .from(artifacts)
+      .where(eq(artifacts.userId, userId));
+    return Number(row?.used ?? 0);
+  }
+
+  private async fits(userId: string, bytes: number) {
+    return !config.storageQuota || (await this.usage(userId)) + bytes <= config.storageQuota;
+  }
 
   uploadsDir(projectId: string) {
     return path.join(config.paths.uploads, projectId);
   }
 
   async list(userId: string, projectId?: string) {
-    const where: SQL[] = [eq(artifacts.userId, userId)];
+    const team = projectId ? await this.teamRole(userId, projectId) : null;
+    const where: SQL[] = team ? [] : [eq(artifacts.userId, userId)];
     if (projectId) where.push(eq(artifacts.projectId, projectId));
     const rows = await this.db.select().from(artifacts).where(and(...where)).orderBy(desc(artifacts.createdAt)).limit(500);
     return rows.map(toDto);
@@ -84,8 +110,15 @@ export class ArtifactsService {
     return rows.map(toDto);
   }
 
-  /** Encrypt a file produced by a run and record it. The source file is consumed. */
+  /**
+   * Encrypt a file produced by a run and record it. The source file is consumed.
+   * Returns null when the owner's storage quota has no room for it.
+   */
   async storeOutput(input: { userId: string; projectId: string | null; runId: string; file: string; name: string }) {
+    if (!(await this.fits(input.userId, fs.statSync(input.file).size))) {
+      fs.rmSync(input.file, { force: true });
+      return null;
+    }
     const id = newId(16);
     const rel = path.join("artifacts", input.userId, id);
     const dest = path.join(config.dataDir, rel);
@@ -113,6 +146,9 @@ export class ArtifactsService {
   }
 
   async storeUpload(userId: string, projectId: string, originalName: string, data: Buffer) {
+    if (!(await this.fits(userId, data.length))) {
+      throw new PayloadTooLargeException("Your storage is full. Delete old files or ask an administrator for more space.");
+    }
     const name = safeFileName(originalName);
     const rel = path.join("uploads", projectId, name);
     fs.mkdirSync(path.join(config.dataDir, "uploads", projectId), { recursive: true });
@@ -127,11 +163,13 @@ export class ArtifactsService {
     return toDto(row);
   }
 
-  private async owned(userId: string, id: string) {
+  private async owned(userId: string, id: string, need: "read" | "write" = "read") {
     const [row] = await this.db.select().from(artifacts).where(eq(artifacts.id, id)).limit(1);
     if (!row) throw new NotFoundException("File not found.");
-    if (row.userId !== userId) throw new ForbiddenException();
-    return row;
+    if (row.userId === userId) return row;
+    const role = await this.teamRole(userId, row.projectId);
+    if (role === "owner" || role === "editor" || (need === "read" && role === "viewer")) return row;
+    throw new ForbiddenException();
   }
 
   async read(userId: string, id: string) {
@@ -170,7 +208,7 @@ export class ArtifactsService {
   }
 
   async setFolder(userId: string, id: string, folder: string | null) {
-    await this.owned(userId, id);
+    await this.owned(userId, id, "write");
     const [row] = await this.db.update(artifacts).set({ folder }).where(eq(artifacts.id, id)).returning();
     return toDto(row);
   }
@@ -211,18 +249,28 @@ export class ArtifactsService {
     return out;
   }
 
+  async deleteOutputsBefore(cutoff: Date) {
+    const rows = await this.db.select().from(artifacts).where(and(ne(artifacts.kind, "upload"), lt(artifacts.createdAt, cutoff)));
+    this.unlink(rows);
+    for (let i = 0; i < rows.length; i += 500) {
+      await this.db.delete(artifacts).where(inArray(artifacts.id, rows.slice(i, i + 500).map((r) => r.id)));
+    }
+    return rows.length;
+  }
+
   private unlink(rows: ArtifactRow[]) {
     for (const r of rows) fs.rmSync(path.join(config.dataDir, r.storagePath), { force: true });
   }
 
   async remove(userId: string, id: string) {
-    const row = await this.owned(userId, id);
+    const row = await this.owned(userId, id, "write");
     this.unlink([row]);
     await this.db.delete(artifacts).where(eq(artifacts.id, id));
   }
 
   async clear(userId: string, projectId: string | undefined, scope: "outputs" | "uploads" | "all" | ArtifactKind) {
-    const where: SQL[] = [eq(artifacts.userId, userId)];
+    const team = projectId ? await this.teamRole(userId, projectId) : null;
+    const where: SQL[] = team === "owner" || team === "editor" ? [] : [eq(artifacts.userId, userId)];
     if (projectId) where.push(eq(artifacts.projectId, projectId));
     if (scope === "outputs") where.push(ne(artifacts.kind, "upload"));
     else if (scope === "uploads") where.push(eq(artifacts.kind, "upload"));

@@ -53,6 +53,23 @@ export class ProjectsController {
     );
   }
 
+  @Get(":id/members")
+  members(@CurrentUser() user: SessionUser, @Param("id") id: string) {
+    return this.projects.members(id, user.id);
+  }
+
+  @Post(":id/members")
+  addMember(@CurrentUser() user: SessionUser, @Param("id") id: string, @Body() body: unknown) {
+    const input = parse(z.object({ email: z.string().email("Enter their account email."), role: z.enum(["editor", "viewer"]) }), body);
+    return this.projects.addMember(id, user.id, input.email, input.role);
+  }
+
+  @Delete(":id/members/:userId")
+  @HttpCode(204)
+  removeMember(@CurrentUser() user: SessionUser, @Param("id") id: string, @Param("userId") memberId: string) {
+    return this.projects.removeMember(id, user.id, memberId);
+  }
+
   @Get(":id/session")
   session(@CurrentUser() user: SessionUser, @Param("id") id: string) {
     return this.projects.sessionInfo(id, user.id);

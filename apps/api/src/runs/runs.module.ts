@@ -1,4 +1,4 @@
-import { Module, type OnApplicationBootstrap } from "@nestjs/common";
+import { Module, type OnApplicationBootstrap, type OnModuleDestroy } from "@nestjs/common";
 import { ArtifactsModule } from "../artifacts/artifacts.module.js";
 import { ProjectsModule } from "../projects/projects.module.js";
 import { VariablesModule } from "../variables/variables.module.js";
@@ -11,10 +11,19 @@ import { RunsService } from "./runs.service.js";
   providers: [RunsService],
   exports: [RunsService],
 })
-export class RunsModule implements OnApplicationBootstrap {
+export class RunsModule implements OnApplicationBootstrap, OnModuleDestroy {
+  private retention: NodeJS.Timeout | null = null;
+
   constructor(private readonly runs: RunsService) {}
 
   async onApplicationBootstrap() {
     await this.runs.markOrphans();
+    const purge = () => void this.runs.purgeExpired().catch(() => {});
+    setTimeout(purge, 60_000);
+    this.retention = setInterval(purge, 6 * 60 * 60_000);
+  }
+
+  onModuleDestroy() {
+    if (this.retention) clearInterval(this.retention);
   }
 }

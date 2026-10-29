@@ -14,8 +14,9 @@ import { cn } from "@/lib/utils";
 import { useWorkbench } from "@/stores/workbench";
 import { PanelHeader } from "./panel-header";
 
-export const STATUS_LABEL: Record<RunStatus, string> = { running: "Running", success: "Passed", failed: "Failed", stopped: "Stopped" };
+export const STATUS_LABEL: Record<RunStatus, string> = { queued: "Queued", running: "Running", success: "Passed", failed: "Failed", stopped: "Stopped" };
 export const STATUS_CLASS: Record<RunStatus, string> = {
+  queued: "text-muted-foreground",
   running: "text-signal",
   success: "text-success",
   failed: "text-danger",

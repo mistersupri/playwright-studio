@@ -30,6 +30,8 @@ const schema = z.object({
   MAX_RUN_SECONDS: z.coerce.number().int().positive().default(600),
   WEB_DIST: z.string().optional(),
   SMTP_URL: z.string().optional(),
+  STORAGE_QUOTA_MB: z.coerce.number().int().min(0).default(0),
+  RETENTION_DAYS: z.coerce.number().int().min(0).default(30),
   SMTP_FROM: z.string().optional(),
 });
 
@@ -100,6 +102,10 @@ function loadConfig() {
     admin: env.ADMIN_EMAIL && env.ADMIN_PASSWORD ? { email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD } : null,
     maxConcurrentRuns: env.MAX_CONCURRENT_RUNS,
     maxRunSeconds: env.MAX_RUN_SECONDS,
+    /** Bytes; 0 means no limit. */
+    storageQuota: env.STORAGE_QUOTA_MB * 1024 * 1024,
+    /** 0 keeps run history and outputs forever. */
+    retentionDays: env.RETENTION_DAYS,
     smtp: env.SMTP_URL ? { url: env.SMTP_URL, from: env.SMTP_FROM ?? "ScriptBench <no-reply@localhost>" } : null,
     webDist: path.resolve(env.WEB_DIST ?? path.join(REPO_ROOT, "apps", "web", "dist")),
     paths: {

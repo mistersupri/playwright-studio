@@ -5,10 +5,14 @@ import { eq } from "drizzle-orm";
 import type { Request, Response } from "express";
 import { config } from "../config.js";
 import { type Database, InjectDb } from "../database/database.module.js";
-import { apiTokens, users } from "../database/schema.js";
+import { apiTokens, type User, users } from "../database/schema.js";
 import type { SessionUser } from "./auth.decorators.js";
 
 export const SESSION_COOKIE = "sb_session";
+
+export function toSessionUser(u: User): SessionUser {
+  return { id: u.id, email: u.email, name: u.name, avatarUrl: u.avatarUrl, role: u.role };
+}
 export const API_TOKEN_PREFIX = "sbt_";
 
 export function hashSecret(secret: string) {
@@ -23,8 +27,8 @@ export class SessionService {
     @InjectDb() private readonly db: Database,
   ) {}
 
-  issue(res: Response, userId: string) {
-    const token = this.jwt.sign({ sub: userId }, { expiresIn: `${SESSION_DAYS}d` });
+  issue(res: Response, user: Pick<User, "id" | "sessionVersion">) {
+    const token = this.jwt.sign({ sub: user.id, v: user.sessionVersion }, { expiresIn: `${SESSION_DAYS}d` });
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: "lax",
@@ -52,10 +56,11 @@ export class SessionService {
     if (!token) return null;
     if (token.startsWith(API_TOKEN_PREFIX)) return this.resolveApiToken(token);
     try {
-      const { sub } = this.jwt.verify<{ sub: string }>(token);
+      const { sub, v } = this.jwt.verify<{ sub: string; v?: number }>(token);
       const [user] = await this.db.select().from(users).where(eq(users.id, sub)).limit(1);
-      if (!user) return null;
-      return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl };
+      // A disabled account, or a password change since this session began, ends the session.
+      if (!user || user.disabledAt || (v ?? 0) !== user.sessionVersion) return null;
+      return toSessionUser(user);
     } catch {
       return null;
     }
@@ -79,7 +84,7 @@ export class SessionService {
     if (!row.token.lastUsedAt || Date.now() - row.token.lastUsedAt.getTime() > 60_000) {
       await this.db.update(apiTokens).set({ lastUsedAt: new Date() }).where(eq(apiTokens.id, id));
     }
-    const u = row.user;
-    return { id: u.id, email: u.email, name: u.name, avatarUrl: u.avatarUrl };
+    if (row.user.disabledAt) return null;
+    return toSessionUser(row.user);
   }
 }

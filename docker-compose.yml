@@ -30,6 +30,8 @@ services:
       SMTP_FROM: ${SMTP_FROM:-}
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-3}
       MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-600}
+      STORAGE_QUOTA_MB: ${STORAGE_QUOTA_MB:-0}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
     volumes:
       - app-data:/data
     # Chromium needs more shared memory than Docker's 64 MB default.

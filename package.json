@@ -19,6 +19,11 @@
     "typecheck": "npm run typecheck -w @scriptbench/api && npm run typecheck -w @scriptbench/web",
     "db:up": "docker compose -f docker-compose.dev.yml up -d --wait postgres",
     "db:down": "docker compose -f docker-compose.dev.yml down",
-    "db:generate": "npm run db:generate -w @scriptbench/api"
+    "db:generate": "npm run db:generate -w @scriptbench/api",
+    "test": "npm run test -w @scriptbench/api && npm run test -w @scriptbench/web",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }

@@ -6,3 +6,6 @@
 .env.*
 !.env.example
 *.log
+e2e/.data
+playwright-report
+test-results

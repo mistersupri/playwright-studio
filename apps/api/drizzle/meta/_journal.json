@@ -29,6 +29,13 @@
       "when": 1793278358887,
       "tag": "0003_cron_notifications_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793278791673,
+      "tag": "0004_accounts_teams",
+      "breakpoints": true
     }
   ]
 }

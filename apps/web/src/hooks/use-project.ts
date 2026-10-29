@@ -12,6 +12,11 @@ export function useIsOwner() {
   return Boolean(me.data && ownerId === me.data.id);
 }
 
+/** Owner or invited editor: may save, upload inputs and schedule. */
+export function useCanEdit() {
+  return useWorkbench((s) => s.project?.myRole === "owner" || s.project?.myRole === "editor");
+}
+
 export function useSaveProject() {
   const qc = useQueryClient();
   return useMutation({

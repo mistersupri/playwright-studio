@@ -1,7 +1,10 @@
-import { Bell, KeyRound, MessageSquareCode } from "lucide-react";
+import { Bell, KeyRound, MessageSquareCode, ShieldCheck, UserRound } from "lucide-react";
 import type { ComponentType } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useMe } from "@/hooks/use-auth";
+import { AccountTab } from "./account-tab";
+import { AdminTab } from "./admin-tab";
 import { GeminiTab } from "./gemini-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { type SettingsTab, useSettingsDialog } from "./settings-store";
@@ -14,14 +17,15 @@ interface TabDef {
   body: ComponentType;
 }
 
-export function SettingsDialog({ extraTabs = [] }: { extraTabs?: TabDef[] }) {
+export function SettingsDialog() {
   const { open, tab, close, setTab } = useSettingsDialog();
+  const me = useMe();
   const tabs: TabDef[] = [
-    ...extraTabs.filter((t) => t.id === "account"),
+    { id: "account", label: "Account", icon: UserRound, body: AccountTab },
     { id: "gemini", label: "Gemini", icon: MessageSquareCode, body: GeminiTab },
     { id: "notifications", label: "Notifications", icon: Bell, body: NotificationsTab },
     { id: "tokens", label: "API tokens", icon: KeyRound, body: TokensTab },
-    ...extraTabs.filter((t) => t.id !== "account"),
+    ...(me.data?.role === "admin" ? [{ id: "admin" as const, label: "Users", icon: ShieldCheck, body: AdminTab }] : []),
   ];
   const active = tabs.find((t) => t.id === tab) ?? tabs[0];
   const Body = active.body;

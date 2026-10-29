@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Post, Query, Req, Res } from "@nestjs/common";
 import { randomBytes } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
@@ -6,6 +6,7 @@ import { config } from "../config.js";
 import { parse } from "../common/validation.js";
 import { CurrentUser, Public, type SessionUser } from "./auth.decorators.js";
 import { AuthService, toSessionUser } from "./auth.service.js";
+import { RateLimiter } from "./rate-limit.js";
 import { SessionService } from "./session.service.js";
 
 const credentials = z.object({
@@ -15,6 +16,15 @@ const credentials = z.object({
 });
 
 const STATE_COOKIE = "sb_oauth_state";
+
+// 10 failed sign-ins per 15 minutes per address and email; 20 sign-ups per hour per address.
+const loginLimit = new RateLimiter(10, 15 * 60_000);
+const registerLimit = new RateLimiter(20, 60 * 60_000);
+const resetLimit = new RateLimiter(5, 60 * 60_000);
+
+function tooMany(seconds: number): never {
+  throw new HttpException(`Too many attempts. Try again in ${Math.ceil(seconds / 60)} minute(s).`, HttpStatus.TOO_MANY_REQUESTS);
+}
 
 function baseUrl(req: Request) {
   return config.appUrl ?? `${req.protocol}://${req.get("host")}`;
@@ -31,7 +41,7 @@ export class AuthController {
   @Get("providers")
   async providers() {
     const firstUser = (await this.auth.userCount()) === 0;
-    return { google: Boolean(config.google), registration: config.allowRegistration || firstUser };
+    return { google: Boolean(config.google), registration: config.allowRegistration || firstUser, passwordReset: Boolean(config.smtp) };
   }
 
   @Public()
@@ -42,20 +52,33 @@ export class AuthController {
 
   @Public()
   @Post("register")
-  async register(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+  async register(@Body() body: unknown, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const wait = registerLimit.retryAfter(req.ip ?? "");
+    if (wait) tooMany(wait);
+    registerLimit.hit(req.ip ?? "");
     const input = parse(credentials, body);
     const user = await this.auth.register(input);
-    this.sessions.issue(res, user.id);
+    this.sessions.issue(res, user);
     return { user: toSessionUser(user) };
   }
 
   @Public()
   @Post("login")
   @HttpCode(200)
-  async login(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+  async login(@Body() body: unknown, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const input = parse(credentials.pick({ email: true, password: true }), body);
-    const user = await this.auth.login(input.email, input.password);
-    this.sessions.issue(res, user.id);
+    const key = `${req.ip}|${input.email.trim().toLowerCase()}`;
+    const wait = loginLimit.retryAfter(key);
+    if (wait) tooMany(wait);
+    let user;
+    try {
+      user = await this.auth.login(input.email, input.password);
+    } catch (err) {
+      loginLimit.hit(key);
+      throw err;
+    }
+    loginLimit.reset(key);
+    this.sessions.issue(res, user);
     return { user: toSessionUser(user) };
   }
 
@@ -64,6 +87,38 @@ export class AuthController {
   @HttpCode(204)
   logout(@Res({ passthrough: true }) res: Response) {
     this.sessions.clear(res);
+  }
+
+  @Post("password")
+  @HttpCode(200)
+  async changePassword(@CurrentUser() me: SessionUser, @Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+    const input = parse(z.object({ current: z.string().optional(), next: credentials.shape.password }), body);
+    const user = await this.auth.changePassword(me.id, input.current, input.next);
+    // Keep this browser signed in; every other session ends.
+    this.sessions.issue(res, user);
+    return { ok: true };
+  }
+
+  @Public()
+  @Post("forgot")
+  @HttpCode(200)
+  async forgot(@Body() body: unknown, @Req() req: Request) {
+    const { email } = parse(credentials.pick({ email: true }), body);
+    const wait = resetLimit.retryAfter(req.ip ?? "");
+    if (wait) tooMany(wait);
+    resetLimit.hit(req.ip ?? "");
+    await this.auth.requestReset(email, baseUrl(req)).catch(() => {});
+    return { ok: true };
+  }
+
+  @Public()
+  @Post("reset")
+  @HttpCode(200)
+  async reset(@Body() body: unknown, @Res({ passthrough: true }) res: Response) {
+    const input = parse(z.object({ token: z.string().min(10).max(200), password: credentials.shape.password }), body);
+    const user = await this.auth.resetPassword(input.token, input.password);
+    this.sessions.issue(res, user);
+    return { user: toSessionUser(user) };
   }
 
   @Public()
@@ -117,7 +172,7 @@ export class AuthController {
       const profile = (await profileRes.json()) as { sub: string; email?: string; name?: string; picture?: string };
       if (!profile.email) return fail("google_email");
       const user = await this.auth.upsertGoogleUser({ ...profile, email: profile.email });
-      this.sessions.issue(res, user.id);
+      this.sessions.issue(res, user);
       res.redirect("/");
     } catch {
       fail("google_failed");

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,7 +6,7 @@ import { decryptJson, encryptJson } from "../common/crypto.js";
 import { config } from "../config.js";
 import { newId } from "../common/ids.js";
 import { type Database, InjectDb } from "../database/database.module.js";
-import { artifacts, browserSessions, type Project, projects, projectVersions, users } from "../database/schema.js";
+import { artifacts, browserSessions, type Project, projectMembers, projects, projectVersions, users } from "../database/schema.js";
 
 export interface ProjectFile {
   name: string;
@@ -14,6 +14,8 @@ export interface ProjectFile {
 }
 
 const MAX_VERSIONS = 20;
+
+export type ProjectRole = "owner" | "editor" | "viewer" | "public";
 
 export const STARTER_FILES: ProjectFile[] = [
   {
@@ -44,11 +46,69 @@ export class ProjectsService {
     };
   }
 
-  private detail(p: Project, ownerName?: string) {
-    return { ...this.summary(p, ownerName), files: decryptJson<ProjectFile[]>(p.filesEnc) };
+  private detail(p: Project, ownerName?: string, myRole?: ProjectRole) {
+    return { ...this.summary(p, ownerName), files: decryptJson<ProjectFile[]>(p.filesEnc), myRole: myRole ?? "owner" };
+  }
+
+  /** How a user relates to a project: owner, invited member, or just a reader of a public project. */
+  async roleOf(p: Project, userId: string): Promise<ProjectRole | null> {
+    if (p.ownerId === userId) return "owner";
+    const [m] = await this.db
+      .select({ role: projectMembers.role })
+      .from(projectMembers)
+      .where(and(eq(projectMembers.projectId, p.id), eq(projectMembers.userId, userId)));
+    if (m) return m.role;
+    return p.isPrivate ? null : "public";
+  }
+
+  /** Owner or editor: may save, upload inputs and schedule. */
+  async editable(id: string, userId: string): Promise<Project> {
+    const p = await this.findRaw(id);
+    const role = await this.roleOf(p, userId);
+    if (role !== "owner" && role !== "editor") throw new ForbiddenException("You can view this project but not change it.");
+    return p;
+  }
+
+  async members(id: string, userId: string) {
+    const p = await this.readable(id, userId);
+    const rows = await this.db
+      .select({ userId: users.id, email: users.email, name: users.name, role: projectMembers.role })
+      .from(projectMembers)
+      .innerJoin(users, eq(users.id, projectMembers.userId))
+      .where(eq(projectMembers.projectId, p.id))
+      .orderBy(users.name);
+    const [owner] = await this.db.select({ userId: users.id, email: users.email, name: users.name }).from(users).where(eq(users.id, p.ownerId));
+    return [{ ...owner, role: "owner" as const }, ...rows];
+  }
+
+  async addMember(id: string, ownerId: string, email: string, role: "editor" | "viewer") {
+    const p = await this.owned(id, ownerId);
+    const [u] = await this.db.select().from(users).where(eq(users.email, email.trim().toLowerCase())).limit(1);
+    if (!u) throw new NotFoundException("No account uses that email. Ask them to sign up first.");
+    if (u.id === p.ownerId) throw new BadRequestException("That is the owner of the project.");
+    await this.db
+      .insert(projectMembers)
+      .values({ projectId: p.id, userId: u.id, role })
+      .onConflictDoUpdate({ target: [projectMembers.projectId, projectMembers.userId], set: { role } });
+    return this.members(id, ownerId);
+  }
+
+  async removeMember(id: string, actorId: string, memberId: string) {
+    const p = await this.findRaw(id);
+    // Owners remove anyone; members can leave on their own.
+    if (p.ownerId !== actorId && memberId !== actorId) throw new ForbiddenException("Only the owner can remove members.");
+    await this.db.delete(projectMembers).where(and(eq(projectMembers.projectId, id), eq(projectMembers.userId, memberId)));
   }
 
   async list(userId: string) {
+    const memberOf = await this.db
+      .select({ project: projects, ownerName: users.name })
+      .from(projectMembers)
+      .innerJoin(projects, eq(projects.id, projectMembers.projectId))
+      .innerJoin(users, eq(users.id, projects.ownerId))
+      .where(eq(projectMembers.userId, userId))
+      .orderBy(desc(projects.updatedAt));
+    const memberIds = new Set(memberOf.map((r) => r.project.id));
     const mine = await this.db
       .select()
       .from(projects)
@@ -63,7 +123,8 @@ export class ProjectsService {
       .limit(100);
     return {
       mine: mine.map((p) => this.summary(p)),
-      shared: shared.map((r) => this.summary(r.project, r.ownerName)),
+      withMe: memberOf.map((r) => this.summary(r.project, r.ownerName)),
+      shared: shared.filter((r) => !memberIds.has(r.project.id)).map((r) => this.summary(r.project, r.ownerName)),
     };
   }
 
@@ -76,7 +137,7 @@ export class ProjectsService {
   /** Readable by its owner, or by anyone signed in when it is public. */
   async readable(id: string, userId: string): Promise<Project> {
     const p = await this.findRaw(id);
-    if (p.ownerId !== userId && p.isPrivate) throw new ForbiddenException("This project is private.");
+    if (!(await this.roleOf(p, userId))) throw new ForbiddenException("This project is private.");
     return p;
   }
 
@@ -93,7 +154,7 @@ export class ProjectsService {
   async get(id: string, userId: string) {
     const p = await this.readable(id, userId);
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, p.ownerId));
-    return this.detail(p, owner?.name);
+    return this.detail(p, owner?.name, (await this.roleOf(p, userId)) ?? undefined);
   }
 
   async create(userId: string, input: { name: string; files?: ProjectFile[]; isPrivate?: boolean }) {
@@ -112,17 +173,17 @@ export class ProjectsService {
   }
 
   async save(id: string, userId: string, input: { name: string; files: ProjectFile[] }) {
-    const current = await this.owned(id, userId);
+    const current = await this.editable(id, userId);
     const unchanged =
       current.name === input.name.trim() && JSON.stringify(this.files(current)) === JSON.stringify(input.files);
-    if (unchanged) return this.detail(current);
+    if (unchanged) return this.detail(current, undefined, (await this.roleOf(current, userId)) ?? undefined);
     const [p] = await this.db
       .update(projects)
       .set({ name: input.name.trim(), filesEnc: encryptJson(input.files), updatedAt: new Date() })
       .where(eq(projects.id, id))
       .returning();
     await this.snapshot(p);
-    return this.detail(p);
+    return this.detail(p, undefined, (await this.roleOf(p, userId)) ?? undefined);
   }
 
   async update(id: string, userId: string, input: { name?: string; isPrivate?: boolean; keepSession?: boolean }) {

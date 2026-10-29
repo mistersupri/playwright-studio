@@ -14,7 +14,7 @@ import type { ProjectSummary } from "@/lib/types";
 export function useProjects() {
   return useQuery({
     queryKey: ["projects"],
-    queryFn: () => api.get<{ mine: ProjectSummary[]; shared: ProjectSummary[] }>("/projects"),
+    queryFn: () => api.get<{ mine: ProjectSummary[]; withMe: ProjectSummary[]; shared: ProjectSummary[] }>("/projects"),
   });
 }
 
@@ -65,6 +65,19 @@ export function ProjectSwitcher({ open, onOpenChange }: { open: boolean; onOpenC
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
                     {p.isPrivate && <Lock className="text-muted-foreground" aria-label="Private" />}
                     <span className="text-xs text-muted-foreground tabular">{formatRelative(p.updatedAt)}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          )}
+          {projects.data && projects.data.withMe.length > 0 && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Shared with you">
+                {projects.data.withMe.map((p) => (
+                  <CommandItem key={p.id} value={`${p.name} ${p.ownerName} ${p.id}`} onSelect={() => go(p.id)}>
+                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                    <span className="text-xs text-muted-foreground">{p.ownerName}</span>
                   </CommandItem>
                 ))}
               </CommandGroup>

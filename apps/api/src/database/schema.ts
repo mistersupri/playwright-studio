@@ -12,6 +12,10 @@ export const users = pgTable(
     passwordHash: text("password_hash"),
     googleSub: text("google_sub"),
     avatarUrl: text("avatar_url"),
+    role: text("role", { enum: ["admin", "member"] }).notNull().default("member"),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    /** Bumped on password change, reset or disable, which signs out every existing session. */
+    sessionVersion: integer("session_version").notNull().default(0),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("users_email_idx").on(t.email), uniqueIndex("users_google_sub_idx").on(t.googleSub)],
@@ -61,7 +65,7 @@ export const runs = pgTable(
     entryFile: text("entry_file").notNull().default("main.js"),
     trigger: text("trigger", { enum: ["manual", "schedule", "api"] }).notNull().default("manual"),
     scheduleId: text("schedule_id"),
-    status: text("status", { enum: ["running", "success", "failed", "stopped"] }).notNull(),
+    status: text("status", { enum: ["queued", "running", "success", "failed", "stopped"] }).notNull(),
     error: text("error"),
     logsEnc: text("logs_enc"),
     createdAt: createdAt(),
@@ -168,6 +172,32 @@ export const browserSessions = pgTable(
   },
   (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
 );
+
+export const projectMembers = pgTable(
+  "project_members",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role", { enum: ["editor", "viewer"] }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] }), index("project_members_user_idx").on(t.userId)],
+);
+
+export const passwordResets = pgTable("password_resets", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  secretHash: text("secret_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: createdAt(),
+});
 
 export const notificationChannels = pgTable(
   "notification_channels",

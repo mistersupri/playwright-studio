@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api";
 import { applyTheme, useTheme } from "@/lib/theme";
 import { LoginPage } from "@/routes/login";
 import { RequireAuth } from "@/routes/require-auth";
+import { ResetPage } from "@/routes/reset";
 import { NotFoundPage } from "@/routes/not-found";
 import "./index.css";
 
@@ -25,6 +26,7 @@ const queryClient = new QueryClient({
 
 const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
+  { path: "/reset", element: <ResetPage /> },
   {
     path: "/",
     element: (

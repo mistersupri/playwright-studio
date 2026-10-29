@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AdminModule } from "./admin/admin.module.js";
 import { AiModule } from "./ai/ai.module.js";
 import { ArtifactsModule } from "./artifacts/artifacts.module.js";
 import { AuthModule } from "./auth/auth.module.js";
@@ -24,6 +25,7 @@ import { VariablesModule } from "./variables/variables.module.js";
     RunsModule,
     SchedulesModule,
     SystemModule,
+    AdminModule,
     TokensModule,
     CollabModule,
   ],

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { useIsOwner } from "@/hooks/use-project";
+import { useCanEdit } from "@/hooks/use-project";
 import { api, errorMessage } from "@/lib/api";
 import { formatRelative } from "@/lib/format";
 import type { EnvWorkspace, Schedule } from "@/lib/types";
@@ -63,7 +63,7 @@ export function SchedulesPanel() {
   const project = useWorkbench((s) => s.project);
   const files = useWorkbench((s) => s.files);
   const viewport = useWorkbench((s) => s.settings.viewport);
-  const isOwner = useIsOwner();
+  const isOwner = useCanEdit();
   const dirty = useIsDirty();
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => api.get<Schedule[]>("/schedules") });
   const sets = useQuery({ queryKey: ["variables"], queryFn: () => api.get<EnvWorkspace[]>("/variables") });
@@ -280,7 +280,7 @@ export function SchedulesPanel() {
             </Button>
           </form>
         ) : (
-          <p className="border-b p-3 text-xs text-muted-foreground">Only the owner of a project can schedule it. Make a copy to schedule your own.</p>
+          <p className="border-b p-3 text-xs text-muted-foreground">Only the owner and editors of a project can schedule it. Make a copy to schedule your own.</p>
         )}
 
         <div className="p-3">

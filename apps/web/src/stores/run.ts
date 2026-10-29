@@ -13,6 +13,8 @@ interface RunState {
   preview: string | null;
   artifacts: Artifact[];
   paused: boolean;
+  /** Place in the server's run queue while waiting for a slot. */
+  queuePosition: number | null;
   pausedLine: number | null;
   pausedFile: string | null;
   choice: { selector: string; options: ChoiceOption[] } | null;
@@ -47,6 +49,7 @@ export const useRun = create<RunState>()((set, get) => ({
   preview: null,
   artifacts: [],
   paused: false,
+  queuePosition: null,
   pausedLine: null,
   pausedFile: null,
   choice: null,
@@ -79,7 +82,7 @@ export const useRun = create<RunState>()((set, get) => ({
     }),
   clearSteps: () => set({ steps: [] }),
   setInspected: (inspected) => set({ inspected }),
-  attach: (runId) => set({ runId, phase: "running" }),
+  attach: (runId) => set((s) => ({ runId, phase: s.phase === "starting" ? "running" : s.phase })),
   fail: (message) =>
     set((s) => ({
       phase: "failed",
@@ -96,8 +99,8 @@ export const useRun = create<RunState>()((set, get) => ({
         break;
       }
       case "status": {
-        const d = data as { status: RunStatus; paused: boolean; line?: number };
-        set({ phase: d.status, paused: d.paused, pausedLine: d.line ?? null });
+        const d = data as { status: RunStatus; paused: boolean; line?: number; position?: number };
+        set({ phase: d.status, paused: d.paused, pausedLine: d.line ?? null, queuePosition: d.position ?? null });
         break;
       }
       case "preview":
@@ -149,4 +152,4 @@ export const useRun = create<RunState>()((set, get) => ({
   clearCookies: () => set({ cookies: [] }),
 }));
 
-export const isActive = (phase: RunPhase) => phase === "starting" || phase === "running";
+export const isActive = (phase: RunPhase) => phase === "starting" || phase === "queued" || phase === "running";
