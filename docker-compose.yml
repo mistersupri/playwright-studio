@@ -1,47 +1,57 @@
-version: '3.8'
+# Production stack: the app and PostgreSQL.
+#   cp .env.example .env    # then fill in the three secrets
+#   docker compose up -d --build
+name: scriptbench
 
 services:
-  playwright-studio:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: playwright-studio-app
+  app:
+    build: .
+    image: scriptbench:latest
     restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      
-      # Optional Manual Login Admin credentials (fallback)
-      - ADMIN_EMAIL=admin@example.com
-      - ADMIN_PASSWORD=adminpassword
-      
-      # Automatically injected by active host environment
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - APP_URL=${APP_URL:-http://localhost:3000}
-      - CLIENT_ID=${CLIENT_ID}
-      - CLIENT_SECRET=${CLIENT_SECRET}
+      NODE_ENV: production
+      DATABASE_URL: postgres://scriptbench:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/scriptbench
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env (openssl rand -hex 32)}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+      APP_URL: ${APP_URL:-}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SMTP_URL: ${SMTP_URL:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-3}
+      MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-600}
+      STORAGE_QUOTA_MB: ${STORAGE_QUOTA_MB:-0}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
     volumes:
-      - studio-data:/app/server-data
-      - studio-screenshots:/app/screenshots
-      - studio-pdf:/app/pdf
-      - studio-excel:/app/excel
-      - studio-uploads:/app/uploads
+      - app-data:/data
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scriptbench
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: scriptbench
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scriptbench -d scriptbench"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
-  studio-data:
-    driver: local
-    name: playwright_studio_data
-  studio-screenshots:
-    driver: local
-    name: playwright_studio_screenshots
-  studio-pdf:
-    driver: local
-    name: playwright_studio_pdfs
-  studio-excel:
-    driver: local
-    name: playwright_studio_excels
-  studio-uploads:
-    driver: local
-    name: playwright_studio_uploads
+  app-data:
+  postgres-data:

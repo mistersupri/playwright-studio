@@ -1,0 +1,222 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Tokens. See DESIGN.md for the reasoning.
+ * Neutrals carry a slight warm hue so long sessions feel less clinical.
+ * --signal is the only accent: it means "the browser is executing".
+ */
+:root {
+  --radius: 0.375rem;
+
+  --background: oklch(0.985 0.003 75);
+  --foreground: oklch(0.22 0.01 60);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.26 0.012 60);
+  --primary-foreground: oklch(0.985 0.003 75);
+  --secondary: oklch(0.95 0.005 75);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.955 0.005 75);
+  --muted-foreground: oklch(0.47 0.012 60);
+  --accent: oklch(0.935 0.006 75);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.55 0.2 27);
+  --border: oklch(0.9 0.006 75);
+  --input: oklch(0.88 0.006 75);
+  --ring: oklch(0.55 0.012 60);
+
+  --signal: oklch(0.56 0.19 38);
+  --signal-foreground: oklch(0.99 0.005 60);
+  --success: oklch(0.52 0.13 150);
+  --warning: oklch(0.52 0.12 70);
+  --danger: oklch(0.55 0.2 27);
+
+  --panel: oklch(0.97 0.004 75);
+  --rail: oklch(0.955 0.005 75);
+  --editor: oklch(1 0 0);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+.dark {
+  --background: oklch(0.2 0.006 60);
+  --foreground: oklch(0.93 0.006 75);
+  --card: oklch(0.225 0.006 60);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.245 0.007 60);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.93 0.006 75);
+  --primary-foreground: oklch(0.2 0.006 60);
+  --secondary: oklch(0.28 0.007 60);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.26 0.006 60);
+  --muted-foreground: oklch(0.72 0.01 70);
+  --accent: oklch(0.29 0.007 60);
+  --accent-foreground: var(--foreground);
+  --destructive: oklch(0.65 0.19 27);
+  --border: oklch(0.31 0.007 60);
+  --input: oklch(0.34 0.008 60);
+  --ring: oklch(0.62 0.01 70);
+
+  --signal: oklch(0.68 0.18 42);
+  --signal-foreground: oklch(0.18 0.01 50);
+  --success: oklch(0.74 0.14 150);
+  --warning: oklch(0.8 0.13 80);
+  --danger: oklch(0.7 0.17 25);
+
+  --panel: oklch(0.215 0.006 60);
+  --rail: oklch(0.185 0.006 60);
+  --editor: oklch(0.2 0.006 60);
+}
+
+@theme inline {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-signal: var(--signal);
+  --color-signal-foreground: var(--signal-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-panel: var(--panel);
+  --color-rail: var(--rail);
+  --color-editor: var(--editor);
+
+  --ease-out: var(--ease-out);
+  --ease-in-out: var(--ease-in-out);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss02";
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Plex Mono with tabular figures keeps timestamps and sizes aligned in lists. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+/* Press feedback for anything that acts on click. Not used on keyboard-driven toggles. */
+.pressable {
+  transition: transform 140ms var(--ease-out);
+}
+.pressable:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* The live indicator: a slow pulse means "running", it stops when the run ends. */
+@keyframes signal-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.signal-live {
+  animation: signal-pulse 1.4s ease-in-out infinite;
+}
+
+/* Monaco glyph-margin breakpoints. */
+.bp-glyph {
+  background: var(--signal);
+  border-radius: 9999px;
+  width: 9px !important;
+  height: 9px !important;
+  margin-left: 6px;
+  margin-top: 5px;
+}
+.bp-glyph-hint {
+  border: 1.5px solid color-mix(in oklch, var(--signal) 60%, transparent);
+  border-radius: 9999px;
+  width: 9px !important;
+  height: 9px !important;
+  margin-left: 6px;
+  margin-top: 5px;
+}
+.bp-line {
+  background: color-mix(in oklch, var(--signal) 14%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pressable:active:not(:disabled) {
+    transform: none;
+  }
+  .signal-live {
+    animation: none;
+  }
+}
+
+/*
+ * Touch screens get 44px hit areas. Desktop keeps the dense layout a code editor needs.
+ * Applied at the design-system level so every button and tab follows it.
+ */
+@media (pointer: coarse) {
+  [data-button],
+  [data-slot="tabs-trigger"],
+  [data-slot="select-trigger"],
+  [role="tab"],
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  [data-slot="input"] {
+    min-height: 44px;
+    /* 16px stops iOS Safari from zooming into focused inputs. */
+    font-size: 16px;
+  }
+  [data-slot="dropdown-menu-item"],
+  [data-slot="command-item"],
+  [data-slot="select-item"] {
+    min-height: 44px;
+  }
+}

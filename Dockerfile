@@ -1,42 +1,52 @@
-# Use official Node.js runtime as the base
-FROM node:20-bookworm-slim
+# syntax=docker/dockerfile:1
 
-# Set environment variables for production
-ENV NODE_ENV=production
-ENV PORT=3000
+# The official Playwright image ships Chromium and every system library it needs.
+# Its version must match the "playwright" dependency in apps/api/package.json.
+ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble
 
-# Install standard utilities
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Establish application directory
+# ---- dependencies (cached until a package.json or the lockfile changes) ----
+FROM ${PLAYWRIGHT_IMAGE} AS deps
 WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
-# Copy dependency descriptors
-COPY package*.json ./
-
-# Install npm dependencies (including devDependencies required for the build stage)
-RUN npm install
-
-# Copy application sources
-COPY . .
-
-# Run production build (compiles the React client, plus the Express server bundle)
+# ---- build the web app and the API ----
+FROM deps AS build
+COPY apps ./apps
 RUN npm run build
 
-# Install Playwright browser executables and system dependencies (NSS, GLib, etc.) for Chromium
-RUN npx playwright install --with-deps chromium
+# ---- production dependencies only ----
+FROM ${PLAYWRIGHT_IMAGE} AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace=@scriptbench/api --no-audit --no-fund
 
-# Prune devDependencies to reduce image size and keep runtime clean
-RUN npm prune --production
+# ---- runtime ----
+FROM ${PLAYWRIGHT_IMAGE} AS runtime
+ENV NODE_ENV=production \
+    PORT=3000 \
+    DATA_DIR=/data \
+    WEB_DIST=/app/apps/web/dist
+WORKDIR /app
 
-# Ensure necessary folders for execution data and artifacts are constructed
-RUN mkdir -p /app/server-data /app/screenshots /app/pdf /app/excel /app/uploads
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=prod-deps /app/package.json ./package.json
+COPY --from=build /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build /app/apps/api/dist ./apps/api/dist
+COPY --from=build /app/apps/api/drizzle ./apps/api/drizzle
+COPY --from=build /app/apps/web/dist ./apps/web/dist
 
-# Expose ingress port 3000
+# Scripts run as the unprivileged pwuser that the Playwright image provides.
+RUN mkdir -p /data && chown -R pwuser:pwuser /data
+USER pwuser
+VOLUME ["/data"]
 EXPOSE 3000
 
-# Production start script command
-CMD ["npm", "start"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/system/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "apps/api/dist/main.js"]
