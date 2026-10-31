@@ -99,6 +99,7 @@ function LiveView() {
   const recordOnly = useRun((s) => s.recordOnly);
   const inspected = useRun((s) => s.inspected);
   const queuePosition = useRun((s) => s.queuePosition);
+  const reconnecting = useRun((s) => s.reconnecting);
   const viewport = useWorkbench((s) => s.settings.viewport);
   const projectId = useWorkbench((s) => s.project?.id);
   const controls = useRunControls();
@@ -458,7 +459,11 @@ function LiveView() {
             )}
           </div>
         )}
-        {paused && !recordOnly && (
+        {reconnecting ? (
+          <div role="status" className="pointer-events-none absolute inset-x-0 top-0 bg-warning/15 px-3 py-1.5 text-center text-xs font-medium text-warning backdrop-blur-sm">
+            Reconnecting. The script keeps running; this view catches up when the connection is back.
+          </div>
+        ) : paused && !recordOnly && (
           <div className="pointer-events-none absolute inset-x-0 top-0 bg-warning/15 px-3 py-1.5 text-center text-xs font-medium text-warning backdrop-blur-sm">
             Paused. The script waits before its next page action.
           </div>

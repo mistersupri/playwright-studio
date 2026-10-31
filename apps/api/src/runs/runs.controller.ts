@@ -64,6 +64,8 @@ export class RunsController {
   /** Server-sent events: replays what happened so far, then streams live. */
   @Get(":id/events")
   events(@CurrentUser() user: SessionUser, @Param("id") id: string, @Req() req: Request, @Res() res: Response) {
+    // Fail with a status before the stream starts, so a reconnecting client learns the run is gone.
+    this.runs.assertVisible(id, user.id);
     let unsubscribe: () => void = () => {};
     const write = (event: { type: string; data: unknown }) => {
       res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);

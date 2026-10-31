@@ -27,7 +27,7 @@ import { ChoiceDialog } from "@/features/topbar/choice-dialog";
 import { TopBar } from "@/features/topbar/top-bar";
 import { useCollabRoom } from "@/hooks/use-collab";
 import { useIsDesktop } from "@/hooks/use-media-query";
-import { useRunStreamCleanup } from "@/hooks/use-run-controls";
+import { useRunReattach, useRunStreamCleanup } from "@/hooks/use-run-controls";
 import { api, ApiError } from "@/lib/api";
 import type { Project } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -100,6 +100,7 @@ export function WorkbenchPage() {
   const dirty = useIsDirty();
   useCollabRoom(project?.id ?? null);
   useRunStreamCleanup();
+  useRunReattach(project?.id ?? null);
 
   useEffect(() => {
     document.title = project ? `${project.name} · ScriptBench` : "ScriptBench";

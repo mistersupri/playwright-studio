@@ -193,8 +193,9 @@ function Group({ children, last }: { children: ReactNode; last?: boolean }) {
 }
 
 /**
- * One key. It acts on pointer-down, before the finger lifts, like a hardware key, and never takes focus.
- * Keys marked `repeat` keep firing while held, the way an arrow key does.
+ * One key. It never takes focus, so the on-screen keyboard stays up. It acts when the finger lifts,
+ * and not at all if the finger moved, because the row scrolls sideways and a swipe is not a press.
+ * Keys marked `repeat` start repeating once held still, the way an arrow key does.
  */
 function Key({
   label,
@@ -211,24 +212,46 @@ function Key({
   onPress: () => void;
   children: ReactNode;
 }) {
-  const timer = useRef<number | undefined>(undefined);
-  const stop = () => {
-    window.clearTimeout(timer.current);
-    window.clearInterval(timer.current);
-    timer.current = undefined;
+  const press = useRef<{ x: number; y: number; repeated: boolean; timer?: number } | null>(null);
+  // Drawn from this instead of :active, which would also light up under a finger that is swiping.
+  const [held, setHeld] = useState(false);
+  const cancel = () => {
+    if (press.current) {
+      window.clearTimeout(press.current.timer);
+      window.clearInterval(press.current.timer);
+    }
+    press.current = null;
+    setHeld(false);
   };
-  useEffect(() => stop, []);
+  useEffect(() => cancel, []);
 
   function down(e: ReactPointerEvent<HTMLButtonElement>) {
-    // Keeps focus (and the on-screen keyboard) on the editor.
+    // Keeps focus (and the on-screen keyboard) on the editor. Panning is still the browser's.
     e.preventDefault();
     if (e.button !== 0) return;
-    onPress();
-    if (!repeat) return;
-    stop();
-    timer.current = window.setTimeout(() => {
-      timer.current = window.setInterval(onPress, 60);
-    }, 380);
+    cancel();
+    const p: NonNullable<typeof press.current> = { x: e.clientX, y: e.clientY, repeated: false };
+    press.current = p;
+    setHeld(true);
+    if (repeat) {
+      p.timer = window.setTimeout(() => {
+        p.repeated = true;
+        onPress();
+        p.timer = window.setInterval(onPress, 60);
+      }, 380);
+    }
+  }
+
+  function move(e: ReactPointerEvent<HTMLButtonElement>) {
+    const p = press.current;
+    // 10 px of travel turns a press into a swipe along the row.
+    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 10) cancel();
+  }
+
+  function up() {
+    const p = press.current;
+    cancel();
+    if (p && !p.repeated) onPress();
   }
 
   return (
@@ -238,16 +261,19 @@ function Key({
       aria-pressed={pressed}
       title={label}
       onPointerDown={down}
-      onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
-      // Pointer-down already acted; a click with detail 0 comes from Enter or Space.
+      onPointerMove={move}
+      onPointerUp={up}
+      onPointerLeave={cancel}
+      // The browser took the gesture over to scroll the row.
+      onPointerCancel={cancel}
+      // Pointer-up already acted; a click with detail 0 comes from Enter or Space.
       onClick={(e) => e.detail === 0 && onPress()}
       onContextMenu={(e) => e.preventDefault()}
       className={cn(
-        "pressable grid min-w-11 shrink-0 touch-manipulation place-items-center px-2 text-muted-foreground select-none focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none active:bg-accent active:text-foreground [&_svg]:size-4",
+        "grid min-w-11 shrink-0 touch-manipulation place-items-center px-2 text-muted-foreground transition-transform duration-100 ease-out select-none focus-visible:bg-accent focus-visible:text-foreground focus-visible:outline-none motion-reduce:transition-none [&_svg]:size-4",
         text && "font-mono text-sm",
         pressed && "bg-accent text-foreground",
+        held && "scale-[0.97] bg-accent text-foreground motion-reduce:scale-100",
       )}
     >
       {children}
