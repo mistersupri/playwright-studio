@@ -84,6 +84,8 @@ Back up both volumes, and keep `ENCRYPTION_KEY` safe: scripts, variables, API ke
 1. The web app posts the project's files and run settings to `POST /api/runs`.
 2. The API writes them to a fresh folder under `DATA_DIR/runs/<id>`, copies the project's input files into `uploads/`, and forks a worker process with that folder as its working directory. The worker gets only the user's variables as its environment, not the server's secrets.
 3. The worker launches Chromium and runs the entry file as the body of an async function with `page`, `context`, `browser`, `pause()`, `solveCaptcha()` and `chooseElements()` in scope. It reports logs, preview frames, network events and cookies over IPC.
+
+   Scripts written for a local Playwright run unchanged: `import` and `export` work across the project's files, an async IIFE at the top level is awaited, packages a file imports are installed on first use, and `chromium.launch()` (or Firefox/WebKit) returns the run's browser so the page shows in the live view. Launch options such as `headless: false` are ignored.
 4. The API streams those to the browser with server-sent events (`GET /api/runs/<id>/events`) and moves new files from the run folder into encrypted storage as they appear.
 5. When the run ends, its log is saved to the run history and the folder is deleted.
 

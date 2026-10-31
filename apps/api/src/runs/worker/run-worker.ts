@@ -9,10 +9,10 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { type Browser, type BrowserContext, type BrowserContextOptions, chromium, devices, firefox, type Page, webkit } from "playwright";
+import { type Browser, type BrowserContext, type BrowserContextOptions, type BrowserType, chromium, devices, firefox, type Page, webkit } from "playwright";
 import { binarizeImage, type CaptchaSolveOptions, solveCaptcha, solveCaptchaFromBuffer } from "./captcha-solver.js";
 import { describe } from "./locator.js";
-import { importsToRequires } from "./transform.js";
+import { entryToFunctionBody } from "./transform.js";
 import type { ChoiceOption, LogLevel, LogSource, NetworkEvent, ParentMessage, WorkerMessage, WorkerStart } from "./protocol.js";
 
 const send = (msg: WorkerMessage) => process.send?.(msg);
@@ -78,6 +78,8 @@ const BUILTINS = new Set(
   (createRequire(import.meta.url)("node:module") as typeof import("node:module")).builtinModules,
 );
 const installed = new Set<string>();
+/** What `require("playwright")` gives the script; set once the run's browser is up. */
+let playwrightForScript: typeof import("playwright") | null = null;
 
 function packageName(specifier: string): string | null {
   if (!specifier || /^[./]/.test(specifier) || specifier.startsWith("node:") || BUILTINS.has(specifier)) return null;
@@ -104,6 +106,7 @@ function buildRequire(): NodeJS.Require {
   };
 
   const req = ((id: string) => {
+    if (playwrightForScript && (id === "playwright" || id === "playwright-core")) return playwrightForScript;
     try {
       return tryAll(id);
     } catch (err) {
@@ -111,10 +114,16 @@ function buildRequire(): NodeJS.Require {
       if (!pkg || installed.has(pkg) || !/^[a-zA-Z0-9\-@/._]+$/.test(pkg)) throw err;
       system(`Package "${pkg}" is not installed yet, installing it now.`);
       installed.add(pkg);
-      execFileSync("npm", ["install", "--no-audit", "--no-fund", "--prefix", opts.packagesDir, pkg], {
-        stdio: "ignore",
-        timeout: 180_000,
-      });
+      try {
+        execFileSync("npm", ["install", "--no-audit", "--no-fund", "--prefix", opts.packagesDir, pkg], {
+          stdio: ["ignore", "ignore", "pipe"],
+          timeout: 180_000,
+          env: { ...process.env, ...opts.npmEnv },
+        });
+      } catch (installErr) {
+        const detail = String((installErr as { stderr?: Buffer }).stderr ?? "").trim().split("\n").slice(-3).join(" ");
+        throw new Error(`Could not install "${pkg}"${detail ? `: ${detail}` : "."}`);
+      }
       system(`Installed "${pkg}".`, "success");
       return createRequire(path.join(opts.packagesDir, "package.json"))(id);
     }
@@ -128,7 +137,91 @@ function buildRequire(): NodeJS.Require {
     return fromWorkspace.resolve(id, o);
   }) as NodeJS.RequireResolve;
   req.cache = fromWorkspace.cache;
+  routeProjectRequires(req);
   return req;
+}
+
+/**
+ * Helper files in the project (`login.js` imported by the entry file) are loaded by
+ * Node's own `require`. Send their package imports through `req` too, so they find the
+ * installed packages, install missing ones and get the run's Playwright.
+ */
+function routeProjectRequires(req: NodeJS.Require) {
+  const Module = createRequire(import.meta.url)("node:module") as {
+    _load: (request: string, parent: { filename?: string } | null, isMain: boolean) => unknown;
+  };
+  const load = Module._load;
+  const workspace = process.cwd() + path.sep;
+  let routing = false;
+  Module._load = function (request, parent, isMain) {
+    const fromProject = parent?.filename?.startsWith(workspace) && !parent.filename.includes(`${path.sep}node_modules${path.sep}`);
+    if (!routing && fromProject && packageName(request)) {
+      routing = true;
+      try {
+        return req(request);
+      } finally {
+        routing = false;
+      }
+    }
+    return load.call(this, request, parent, isMain);
+  };
+}
+
+/** A proxy that swaps some members of `target` and binds the rest to it. */
+function override<T extends object>(target: T, members: Record<string, unknown>): T {
+  return new Proxy(target, {
+    get(t, prop) {
+      if (typeof prop === "string" && prop in members) return members[prop];
+      const value = Reflect.get(t, prop, t);
+      return typeof value === "function" ? value.bind(t) : value;
+    },
+  });
+}
+
+/**
+ * Scripts written for a local Playwright launch a browser of their own. Here they get
+ * the run's browser instead: the page shows in the live view, the run settings apply,
+ * and `headless: false` does not fail on a server without a display.
+ */
+function managedPlaywright(real: typeof import("playwright"), scriptPage: Page) {
+  const run = { browser: browser!, context: context! };
+  let pageGiven = false;
+  let noticed = false;
+  const notice = (what: string) => {
+    if (noticed) return;
+    noticed = true;
+    system(`The script calls ${what}; it gets this run's ${run.browser.browserType().name()} so you can watch it here. Launch options such as headless are ignored.`);
+  };
+  // The first page asked for is the one in the live view.
+  const newPage = async () => {
+    if (pageGiven) return run.context.newPage();
+    pageGiven = true;
+    return scriptPage;
+  };
+  const noop = async () => {};
+  const managedContext = override(run.context, { newPage, close: noop });
+  const managedBrowser = override(run.browser, {
+    newPage,
+    newContext: async () => managedContext,
+    contexts: () => [managedContext],
+    close: noop,
+  });
+  const managedType = (type: BrowserType) =>
+    override(type, {
+      launch: async () => {
+        notice(`${type.name()}.launch()`);
+        return managedBrowser;
+      },
+      launchPersistentContext: async () => {
+        notice(`${type.name()}.launchPersistentContext()`);
+        return managedContext;
+      },
+    });
+  return override(real, {
+    chromium: managedType(real.chromium),
+    firefox: managedType(real.firefox),
+    webkit: managedType(real.webkit),
+  });
 }
 
 function captchaOptions(extra?: CaptchaSolveOptions): CaptchaSolveOptions {
@@ -221,14 +314,18 @@ function pausablePage(target: Page): Page {
 }
 
 function instrument(code: string): string {
-  const source = importsToRequires(code);
-  if (!opts.debug || opts.breakpoints.length === 0) return source;
-  system(`Debugger: ${opts.breakpoints.length} breakpoint(s) set.`);
-  const marks = new Set(opts.breakpoints);
-  return source
-    .split("\n")
-    .map((line, i) => (marks.has(i + 1) ? `await __breakpoint(${i + 1});\n${line}` : line))
-    .join("\n");
+  let source = entryToFunctionBody(code);
+  if (opts.debug && opts.breakpoints.length > 0) {
+    system(`Debugger: ${opts.breakpoints.length} breakpoint(s) set.`);
+    const marks = new Set(opts.breakpoints);
+    source = source
+      .split("\n")
+      .map((line, i) => (marks.has(i + 1) ? `await __breakpoint(${i + 1});\n${line}` : line))
+      .join("\n");
+  }
+  // A block of its own lets the script declare names the runner also passes in, such as
+  // `const { chromium } = require("playwright")`. The brace shares line 1 so line numbers hold.
+  return `{${source}\n}`;
 }
 
 function startPreview() {
@@ -426,6 +523,8 @@ async function run(start: WorkerStart) {
   }
 
   const safePage = pausablePage(page);
+  playwrightForScript = managedPlaywright(createRequire(import.meta.url)("playwright"), safePage);
+  const scriptEngine = playwrightForScript[engine.name() as "chromium" | "firefox" | "webkit"];
   const scriptConsole = {
     log: (...a: unknown[]) => log("script", "log", format(a)),
     info: (...a: unknown[]) => log("script", "info", format(a)),
@@ -454,7 +553,7 @@ async function run(start: WorkerStart) {
   const req = buildRequire();
   const runOnce = (row?: Record<string, string>, rowIndex?: number) =>
     fn(
-      browser, context, safePage, scriptConsole, req, engine, userPause, breakpoint,
+      browser, context, safePage, scriptConsole, req, scriptEngine, userPause, breakpoint,
       (sel: string, o?: CaptchaSolveOptions) => captchaFromSelector(page!, sel, o),
       (src: Buffer | string, o?: CaptchaSolveOptions) => captchaFromImage(src, o),
       (sel: string) => chooseElements(page!, sel),
