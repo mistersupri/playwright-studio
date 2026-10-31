@@ -129,6 +129,11 @@
   #root {
     height: 100%;
   }
+  /* The app scrolls inside its panels; pull-to-refresh or rubber-banding the whole page would only throw work away. */
+  html,
+  body {
+    overscroll-behavior: none;
+  }
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: "ss02";
@@ -218,5 +223,17 @@
   [data-slot="command-item"],
   [data-slot="select-item"] {
     min-height: 44px;
+  }
+  /* Taps fire without the double-tap-zoom wait, and a long press on a control does not select its label. */
+  button,
+  [role="button"],
+  [role="tab"] {
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* Monaco types through a hidden textarea; under 16px iOS Safari zooms the page on every focus. */
+  .monaco-editor textarea.inputarea {
+    font-size: 16px !important;
   }
 }

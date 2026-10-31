@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, ListPlus, Pause, Play, SquareDashedMousePointer, Trash2 } from "lucide-react";
+import { ChevronDown, Copy, Keyboard, ListPlus, Pause, Play, SquareDashedMousePointer, Trash2 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { toast } from "sonner";
 import { PromptDialog } from "@/components/prompt-dialog";
@@ -7,6 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { useRunControls } from "@/hooks/use-run-controls";
 import { toPlaywrightKey } from "@/lib/keys";
 import { stepsToCode, tidySteps } from "@/lib/recorder";
@@ -113,10 +114,16 @@ function LiveView() {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const wheel = useRef<{ x: number; y: number; dx: number; dy: number; timer?: number }>({ x: 0, y: 0, dx: 0, dy: 0 });
   const inspectBusy = useRef(0);
+  // One finger on the screenshot: a tap clicks, a drag scrolls the page, a flick keeps scrolling.
+  const touch = useRef<{ id: number; x: number; y: number; panning: boolean; samples: { t: number; x: number; y: number }[] } | null>(null);
+  const fling = useRef(0);
+  const coarse = useMediaQuery("(pointer: coarse)");
 
   useEffect(() => {
     if (!live) setInspecting(false);
+    if (!live) cancelAnimationFrame(fling.current);
   }, [live]);
+  useEffect(() => () => cancelAnimationFrame(fling.current), []);
   useEffect(() => {
     inspectBusy.current = 0;
   }, [inspected]);
@@ -138,9 +145,27 @@ function LiveView() {
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
     if (!live) return;
+    if (e.pointerType !== "mouse") {
+      // No compatibility mousedown, so an open keyboard stays open while tapping into page fields.
+      e.preventDefault();
+      cancelAnimationFrame(fling.current);
+      if (!e.isPrimary) {
+        // A second finger cancels the tap but keeps the first finger's scroll.
+        if (touch.current) touch.current.panning = true;
+        return;
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      touch.current = { id: e.pointerId, x: e.clientX, y: e.clientY, panning: false, samples: [{ t: e.timeStamp, x: e.clientX, y: e.clientY }] };
+      return;
+    }
     // Keep focus on the hidden field so the next keystrokes go to the page.
     e.preventDefault();
     inputRef.current?.focus({ preventScroll: true });
+    activate(e.clientX, e.clientY);
+  }
+
+  /** A click, or in inspect mode a copy of the locator under the pointer. */
+  function activate(clientX: number, clientY: number) {
     if (inspecting) {
       const locator = useRun.getState().inspected?.locator;
       if (locator) {
@@ -149,32 +174,111 @@ function LiveView() {
       }
       return;
     }
-    const pos = toPage(e.clientX, e.clientY);
+    const pos = toPage(clientX, clientY);
     if (!pos) return;
     setRipple({ x: pos.localX, y: pos.localY, key: Date.now() });
     enqueue(() => controls.click(pos.x, pos.y));
   }
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
-    if (!inspecting || !live) return;
+    const t = touch.current;
+    if (t && e.pointerId === t.id) {
+      const last = t.samples[t.samples.length - 1];
+      // 8 px of travel before a touch counts as a drag, so a slightly shaky tap still clicks.
+      if (!t.panning && Math.hypot(e.clientX - t.x, e.clientY - t.y) < 8) return;
+      t.panning = true;
+      scrollBy(e.clientX, e.clientY, last.x - e.clientX, last.y - e.clientY);
+      t.samples.push({ t: e.timeStamp, x: e.clientX, y: e.clientY });
+      if (t.samples.length > 6) t.samples.shift();
+      return;
+    }
+    if (!inspecting || !live || e.pointerType !== "mouse") return;
+    inspectAt(e.clientX, e.clientY);
+  }
+
+  function onPointerUp(e: PointerEvent<HTMLDivElement>) {
+    const t = touch.current;
+    if (!t || e.pointerId !== t.id) return;
+    touch.current = null;
+    if (!t.panning) {
+      tap(e.clientX, e.clientY);
+      return;
+    }
+    // Velocity over the last ~100 ms of the drag, in screen px per ms.
+    const recent = t.samples.filter((s) => e.timeStamp - s.t < 100);
+    if (recent.length < 2) return;
+    const first = recent[0];
+    const last = recent[recent.length - 1];
+    const dt = Math.max(last.t - first.t, 1);
+    startFling(e.clientX, e.clientY, (first.x - last.x) / dt, (first.y - last.y) / dt);
+  }
+
+  /** Touch has no hover, so in inspect mode the first tap points and a tap inside the highlight copies. */
+  function tap(clientX: number, clientY: number) {
+    if (inspecting && !insideHighlight(clientX, clientY)) {
+      inspectAt(clientX, clientY, true);
+      return;
+    }
+    activate(clientX, clientY);
+  }
+
+  function insideHighlight(clientX: number, clientY: number) {
+    const box = useRun.getState().inspected?.box;
+    const pos = toPage(clientX, clientY);
+    if (!box || !pos) return false;
+    return pos.x >= box.x && pos.x <= box.x + box.width && pos.y >= box.y && pos.y <= box.y + box.height;
+  }
+
+  function inspectAt(clientX: number, clientY: number, force = false) {
     const now = Date.now();
     // One question in flight at a time; give up waiting after 400 ms.
-    if (inspectBusy.current && now - inspectBusy.current < 400) return;
-    const pos = toPage(e.clientX, e.clientY);
+    if (!force && inspectBusy.current && now - inspectBusy.current < 400) return;
+    const pos = toPage(clientX, clientY);
     if (!pos) return;
     inspectBusy.current = now;
     controls.inspect(pos.x, pos.y);
+  }
+
+  /** Coast after a flick, slowing like a native scroll view, until the finger lands again. */
+  function startFling(clientX: number, clientY: number, vx: number, vy: number) {
+    if (Math.hypot(vx, vy) < 0.3) return;
+    let prev = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(now - prev, 32);
+      prev = now;
+      scrollBy(clientX, clientY, vx * dt, vy * dt);
+      const decay = Math.pow(0.995, dt);
+      vx *= decay;
+      vy *= decay;
+      if (Math.hypot(vx, vy) > 0.05) fling.current = requestAnimationFrame(step);
+    };
+    fling.current = requestAnimationFrame(step);
   }
 
   function onWheel(e: WheelEvent<HTMLDivElement>) {
     if (!live) return;
     const pos = toPage(e.clientX, e.clientY);
     if (!pos) return;
+    queueWheel(pos.x, pos.y, e.deltaX, e.deltaY);
+  }
+
+  /** Scroll by a distance measured on the screenshot; the page scrolls the same distance at its own scale. */
+  function scrollBy(clientX: number, clientY: number, dx: number, dy: number) {
+    const img = imgRef.current;
+    if (!img || !img.naturalWidth) return;
+    const d = drawnRect(img);
+    // The finger may leave the picture mid-drag; aim the wheel at the nearest point on it.
+    const x = Math.min(Math.max(clientX - d.rect.left - d.offsetX, 0), d.width) / d.scale;
+    const y = Math.min(Math.max(clientY - d.rect.top - d.offsetY, 0), d.height) / d.scale;
+    queueWheel(x, y, dx / d.scale, dy / d.scale);
+  }
+
+  function queueWheel(x: number, y: number, dx: number, dy: number) {
     const w = wheel.current;
-    w.x = pos.x;
-    w.y = pos.y;
-    w.dx += e.deltaX;
-    w.dy += e.deltaY;
+    w.x = x;
+    w.y = y;
+    w.dx += dx;
+    w.dy += dy;
     // Batch a burst of wheel events into one scroll.
     if (w.timer) return;
     w.timer = window.setTimeout(() => {
@@ -182,7 +286,8 @@ function LiveView() {
       w.dx = 0;
       w.dy = 0;
       w.timer = undefined;
-      enqueue(() => controls.wheel(x, y, dx, dy));
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      enqueue(() => controls.wheel(x, y, Math.max(-5000, Math.min(5000, dx)), Math.max(-5000, Math.min(5000, dy))));
     }, 80);
   }
 
@@ -236,6 +341,21 @@ function LiveView() {
         <span className="hidden shrink-0 px-1 font-mono text-muted-foreground tabular xl:inline">
           {viewport.width}×{viewport.height}
         </span>
+        {coarse && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={focused ? "Hide keyboard" : "Type on the page"}
+            aria-pressed={focused}
+            disabled={!live}
+            // Keep the hidden field's focus; a tap that blurs it first would close the keyboard and reopen it.
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => (focused ? inputRef.current?.blur() : inputRef.current?.focus({ preventScroll: true }))}
+            className={cn(focused && "bg-accent text-foreground")}
+          >
+            <Keyboard />
+          </Button>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -277,11 +397,15 @@ function LiveView() {
       <div
         className={cn(
           "relative min-h-0 flex-1 overflow-hidden bg-muted/30 outline-offset-[-2px]",
+          // While the page is live every finger gesture belongs to it, not to the app around it.
+          live && "touch-none overscroll-none",
           focused && live && "outline-2 outline-ring",
         )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerLeave={() => inspecting && useRun.getState().setInspected(null)}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => (touch.current = null)}
+        onPointerLeave={(e) => e.pointerType === "mouse" && inspecting && useRun.getState().setInspected(null)}
         onWheel={onWheel}
       >
         {preview ? (
@@ -370,16 +494,22 @@ function LiveView() {
             </Button>
           )}
           <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground" aria-live="polite">
-            {inspecting ? (
+            {inspecting && coarse ? (
+              "Tap an element to see its locator, tap it again to copy."
+            ) : inspecting ? (
               <>
                 Hover an element, click to copy its locator. <Kbd>Esc</Kbd> to stop.
               </>
+            ) : focused && live && coarse ? (
+              "Typing goes to the page."
             ) : focused && live ? (
               <>
                 Typing goes to the page. <Kbd>Shift</Kbd> <Kbd>Esc</Kbd> to leave.
               </>
             ) : recordOnly ? (
               "Use the page. Press Stop in the top bar when you are done."
+            ) : coarse ? (
+              "Tap to click, drag to scroll."
             ) : (
               "Click the page to interact with it."
             )}

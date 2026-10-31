@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCollab } from "@/hooks/use-collab";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { api, errorMessage } from "@/lib/api";
 import { languageFor, loadPlaywrightTypes, monaco } from "@/lib/monaco";
 import { useTheme } from "@/lib/theme";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { useRun } from "@/stores/run";
 import { useBreakpoints, useWorkbench } from "@/stores/workbench";
 import { NewFileDialog } from "./file-dialogs";
+import { TouchToolbar } from "./touch-toolbar";
 
 type MonacoEditor = monaco.editor.IStandaloneCodeEditor;
 
@@ -25,11 +27,12 @@ export function CodeEditor() {
   const debug = useWorkbench((s) => s.settings.debug);
   const reveal = useWorkbench((s) => s.reveal);
   const insertion = useWorkbench((s) => s.insertion);
-  const [mounted, setMounted] = useState(false);
+  const [mountedEditor, setMountedEditor] = useState<MonacoEditor | null>(null);
   const theme = useTheme((s) => s.theme);
   const breakpoints = useBreakpoints(activeFile);
   const pausedLine = useRun((s) => (s.paused && s.pausedFile === activeFile ? s.pausedLine : null));
   const collab = useCollab();
+  const coarse = useMediaQuery("(pointer: coarse)");
 
   const editorRef = useRef<MonacoEditor | null>(null);
   const decorations = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
@@ -79,7 +82,7 @@ export function CodeEditor() {
   // Recorder output lands at the cursor. Waits until the editor (and the right file) is showing.
   useEffect(() => {
     const editor = editorRef.current;
-    if (!mounted || !editor || !insertion || insertion.file !== activeFile) return;
+    if (!mountedEditor || !editor || !insertion || insertion.file !== activeFile) return;
     const selection = editor.getSelection() ?? new monaco.Selection(1, 1, 1, 1);
     const model = editor.getModel();
     const lineText = model?.getLineContent(selection.startLineNumber) ?? "";
@@ -90,12 +93,12 @@ export function CodeEditor() {
     editor.pushUndoStop();
     editor.focus();
     useWorkbench.setState({ insertion: null });
-  }, [insertion, activeFile, mounted]);
+  }, [insertion, activeFile, mountedEditor]);
 
   const onMount: OnMount = (editor) => {
     editorRef.current = editor;
     decorations.current = editor.createDecorationsCollection();
-    setMounted(true);
+    setMountedEditor(editor);
     void loadPlaywrightTypes();
     editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
@@ -178,6 +181,8 @@ export function CodeEditor() {
         </div>
       </div>
 
+      {coarse && file && <TouchToolbar editor={mountedEditor} />}
+
       <div className="min-h-0 flex-1">
         {file ? (
           <Editor
@@ -195,8 +200,9 @@ export function CodeEditor() {
             loading={<Spinner className="text-muted-foreground" />}
             options={{
               fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
-              fontSize: 13,
-              lineHeight: 20,
+              // A touch more size on phones, where the caret is placed with a finger.
+              fontSize: coarse ? 14 : 13,
+              lineHeight: coarse ? 22 : 20,
               glyphMargin: true,
               minimap: { enabled: false },
               scrollBeyondLastLine: false,
