@@ -26,3 +26,66 @@ describe("importsToRequires", () => {
     expect(fn(require)).toBe(`a/b`);
   });
 });
+
+import { entryToFunctionBody, esmToCommonJs, exportsToCommonJs } from "../src/runs/worker/transform.js";
+
+/** Loads CommonJS source as a module and returns its exports. */
+function load(code: string, modules: Record<string, unknown> = {}) {
+  const module = { exports: {} as Record<string, unknown> };
+  new Function("module", "exports", "require", "__filename", "__dirname", code)(
+    module, module.exports, (id: string) => modules[id] ?? require(id), "/tmp/helper.js", "/tmp",
+  );
+  return module.exports;
+}
+
+describe("exportsToCommonJs", () => {
+  it("exports declarations, lists and defaults", () => {
+    const exports = load(
+      esmToCommonJs(
+        [
+          `export const login = async (page) => page + "!";`,
+          `export function add(a, b) { return a + b; }`,
+          `export class Box {}`,
+          `const secret = 42, other = 1;`,
+          `export { secret as answer, other };`,
+          `export let { x, y: why } = { x: 1, y: 2 };`,
+          `export default "hello";`,
+        ].join("\n"),
+      ),
+    );
+    expect(Object.keys(exports).sort()).toEqual(["Box", "add", "answer", "default", "login", "other", "why", "x"].sort());
+    expect((exports.add as (a: number, b: number) => number)(2, 3)).toBe(5);
+    expect(exports.answer).toBe(42);
+    expect(exports.why).toBe(2);
+    expect(exports.default).toBe("hello");
+  });
+
+  it("re-exports from other modules", () => {
+    const exports = load(esmToCommonJs(`export * from "a";\nexport { b as bee } from "b";`), { a: { one: 1 }, b: { b: 2 } });
+    expect(exports).toEqual({ one: 1, bee: 2 });
+  });
+
+  it("maps import.meta to CommonJS", () => {
+    const exports = load(esmToCommonJs(`export const dir = import.meta.dirname;\nexport const url = import.meta.url;`));
+    expect(exports.dir).toBe("/tmp");
+    expect(exports.url).toBe("file:///tmp/helper.js");
+  });
+
+  it("only strips the keywords in the entry file", () => {
+    expect(exportsToCommonJs(`export const a = 1;\nexport default a;`, { strip: true })).toBe(`const a = 1;\na;`);
+  });
+});
+
+describe("entryToFunctionBody", () => {
+  it("awaits a top-level async IIFE so the run lasts as long as the script", async () => {
+    const body = entryToFunctionBody(`import { setTimeout as wait } from "node:timers/promises";\nlet done = false;\n(async () => {\n  await wait(20);\n  done = true;\n})();\nreturn () => done;`);
+    expect(body).toContain("await (async () => {");
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+    const isDone = await new AsyncFunction("require", body)(require);
+    expect(isDone()).toBe(true);
+  });
+
+  it("leaves nested IIFEs alone", () => {
+    expect(entryToFunctionBody(`if (x) {\n  (async () => {})();\n}`)).not.toContain("await");
+  });
+});

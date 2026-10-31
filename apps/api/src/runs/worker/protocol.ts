@@ -15,6 +15,8 @@ export interface WorkerStart {
   /** Values that must never appear in logs (secret variables). */
   redact: string[];
   packagesDir: string;
+  /** Proxy and certificate settings for `npm install`, kept out of the script's environment. */
+  npmEnv: Record<string, string>;
   appRoot: string;
   interactive: boolean;
   /** "record" opens startUrl and waits for the person to drive the page. */

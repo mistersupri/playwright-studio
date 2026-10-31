@@ -18,7 +18,7 @@ import { VariablesService } from "../variables/variables.service.js";
 import type {
   ChoiceOption, LogLevel, LogSource, NetworkEvent, ParentMessage, RecordedStep, WorkerMessage, WorkerStart,
 } from "./worker/protocol.js";
-import { importsToRequires } from "./worker/transform.js";
+import { esmToCommonJs } from "./worker/transform.js";
 
 const WORKER = fileURLToPath(new URL("./worker/run-worker.js", import.meta.url));
 const MAX_LOGS = 5000;
@@ -142,6 +142,15 @@ function walk(dir: string, root = dir, out: string[] = []): string[] {
     else if (entry.isFile()) out.push(path.relative(root, abs));
   }
   return out;
+}
+
+/** The server's network settings that `npm install` needs behind a proxy or a private registry. */
+function npmNetworkEnv(): Record<string, string> {
+  const keys = [
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "npm_config_registry", "NPM_CONFIG_REGISTRY",
+  ];
+  return Object.fromEntries(keys.filter((k) => process.env[k]).map((k) => [k, process.env[k]!]));
 }
 
 @Injectable()
@@ -306,6 +315,7 @@ export class RunsService implements OnApplicationShutdown {
       gemini,
       redact: secrets,
       packagesDir: config.paths.packages,
+      npmEnv: npmNetworkEnv(),
       appRoot: API_ROOT,
       interactive: (input.trigger ?? "manual") === "manual",
       mode: input.record ? "record" : "script",
@@ -359,7 +369,7 @@ export class RunsService implements OnApplicationShutdown {
       if (!target.startsWith(dir + path.sep)) continue;
       fs.mkdirSync(path.dirname(target), { recursive: true });
       // The entry file is wrapped by the worker; helper modules are loaded with require().
-      fs.writeFileSync(target, f.name === entryFile || !/\.[cm]?js$/.test(f.name) ? f.code : importsToRequires(f.code));
+      fs.writeFileSync(target, f.name === entryFile || !/\.[cm]?js$/.test(f.name) ? f.code : esmToCommonJs(f.code));
     }
     const uploads = projectId ? this.artifacts.uploadsDir(projectId) : null;
     fs.mkdirSync(path.join(dir, "uploads"), { recursive: true });
