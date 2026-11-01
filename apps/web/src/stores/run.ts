@@ -25,6 +25,10 @@ interface RunState {
   /** True for runs started with Record rather than Run. */
   recordOnly: boolean;
   inspected: Inspected | null;
+  /** The event stream dropped; the run keeps going on the server while the page reconnects. */
+  reconnecting: boolean;
+  /** Recorded steps from earlier runs, kept when a reconnect replays this run's steps. */
+  stepsBase: number;
 
   begin: (file: string, recordOnly?: boolean) => void;
   clearSteps: () => void;
@@ -35,6 +39,9 @@ interface RunState {
   clearLogs: () => void;
   clearNetwork: () => void;
   clearCookies: () => void;
+  setReconnecting: (on: boolean) => void;
+  /** Drop what the server is about to replay, so a reconnect rebuilds the run without duplicates. */
+  resync: () => void;
 }
 
 const MAX_LOGS = 4000;
@@ -59,6 +66,8 @@ export const useRun = create<RunState>()((set, get) => ({
   recording: false,
   recordOnly: false,
   inspected: null,
+  reconnecting: false,
+  stepsBase: 0,
 
   begin: (file, recordOnly = false) =>
     set({
@@ -79,6 +88,8 @@ export const useRun = create<RunState>()((set, get) => ({
       recording: false,
       recordOnly,
       inspected: null,
+      reconnecting: false,
+      stepsBase: get().steps.length,
     }),
   clearSteps: () => set({ steps: [] }),
   setInspected: (inspected) => set({ inspected }),
@@ -150,6 +161,17 @@ export const useRun = create<RunState>()((set, get) => ({
   clearLogs: () => set({ logs: [] }),
   clearNetwork: () => set({ network: [] }),
   clearCookies: () => set({ cookies: [] }),
+  setReconnecting: (reconnecting) => set({ reconnecting }),
+  resync: () =>
+    set((s) => ({
+      logs: [],
+      network: [],
+      artifacts: [],
+      steps: s.steps.slice(0, s.stepsBase),
+      choice: null,
+      recording: false,
+      inspected: null,
+    })),
 }));
 
 export const isActive = (phase: RunPhase) => phase === "starting" || phase === "queued" || phase === "running";

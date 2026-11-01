@@ -116,6 +116,8 @@ export interface RunSummary {
 }
 
 export interface RunDetail extends RunSummary {
+  /** The run is still executing on the server and its event stream can be joined. */
+  live: boolean;
   logs: LogLine[];
   artifacts: Artifact[];
 }

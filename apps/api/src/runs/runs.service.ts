@@ -82,7 +82,9 @@ type RunEvent =
   | { type: "step"; data: RecordedStep }
   | { type: "recording"; data: { on: boolean } }
   | { type: "inspected"; data: Extract<WorkerMessage, { type: "inspected" }> }
-  | { type: "done"; data: { status: RunStatus; error?: string } };
+  | { type: "done"; data: { status: RunStatus; error?: string } }
+  /** Marks the end of the replay a new subscriber gets, so a reconnecting client knows it has caught up. */
+  | { type: "synced"; data: Record<string, never> };
 
 type RunStatus = "queued" | "running" | "success" | "failed" | "stopped";
 
@@ -549,6 +551,11 @@ export class RunsService implements OnApplicationShutdown {
     return s;
   }
 
+  /** Throws unless the run is still held in memory and belongs to this user. */
+  assertVisible(id: string, userId: string) {
+    this.session(id, userId);
+  }
+
   subscribe(id: string, userId: string, listener: (e: RunEvent) => void) {
     const s = this.session(id, userId);
     listener(this.statusEvent(s));
@@ -561,6 +568,7 @@ export class RunsService implements OnApplicationShutdown {
     for (const step of s.steps) listener({ type: "step", data: step });
     if (s.recording) listener({ type: "recording", data: { on: true } });
     if (s.choice) listener({ type: "choice", data: s.choice });
+    listener({ type: "synced", data: {} });
     if (s.status !== "running" && s.status !== "queued") {
       listener({ type: "done", data: { status: s.status, error: s.error } });
       return () => {};
@@ -643,6 +651,9 @@ export class RunsService implements OnApplicationShutdown {
     const { logsEnc, ...rest } = row;
     return {
       ...rest,
+      ...(live && { status: live.status, error: live.error ?? rest.error }),
+      // False once the run's process is gone (finished a while ago, or lost in a server restart).
+      live: Boolean(live && (live.status === "running" || live.status === "queued")),
       logs: live ? live.logs : logsEnc ? decryptJson<LogLine[]>(logsEnc) : [],
       artifacts: await this.artifacts.forRun(id),
     };

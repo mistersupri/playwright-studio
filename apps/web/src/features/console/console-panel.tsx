@@ -2,6 +2,7 @@ import { Ban, Copy, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -44,6 +45,7 @@ export function ConsolePanel() {
           </TabsTrigger>
         </TabsList>
       </div>
+      <ReconnectingNotice />
       <TabsContent value="output" className="min-h-0 flex-1">
         <LogView />
       </TabsContent>
@@ -54,6 +56,18 @@ export function ConsolePanel() {
         <CookieView />
       </TabsContent>
     </Tabs>
+  );
+}
+
+/** Shown while the event stream is down. The run is unaffected, so this informs rather than alarms. */
+function ReconnectingNotice() {
+  const reconnecting = useRun((s) => s.reconnecting);
+  if (!reconnecting) return null;
+  return (
+    <p role="status" className="flex shrink-0 items-center gap-2 border-b bg-warning/10 px-3 py-1.5 text-xs text-warning">
+      <Spinner aria-hidden className="size-3" />
+      Reconnecting. The script keeps running on the server, and missed output appears here when the connection is back.
+    </p>
   );
 }
 
